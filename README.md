@@ -13,11 +13,11 @@ A 24/7 stream watchdog: off-air, frozen picture, silence.</p>
 
 ## What it does
 
-DEAD AIR is a bounded observer for streams you own or are authorized to monitor. It samples configured sources and reports three independent conditions: off-air, frozen picture, and silence. Each condition has its own evidence and recovery path; a successful check in one does not clear another.
+A stream can be live on the platform and dead on screen. DEAD AIR watches a stream you own and alerts you when the stream goes off-air, freezes, or goes silent, even while the platform still says you're live. Chat is a terrible uptime monitor.
 
-Use sustained samples and positive recovery before treating a source as restored. A missing or inconclusive sample remains **UNKNOWN**, not **LIVE**. When only a provider thumbnail is available, the result is degraded: a thumbnail cannot establish that the actual stream picture is moving.
+Each cycle it pulls a short sample of the real stream (12 seconds in the example config) and runs ffmpeg's freezedetect and silencedetect on it. yt-dlp resolves YouTube links. A provider thumbnail is a degraded fallback, off in the example.
 
-Remote captures include a 100 ms acquisition prefix followed by the configured full common measurement duration. Startup after that prefix, or missing or gapped decoded content in the measurement window, remains **UNKNOWN**.
+You need Python 3.11+, ffmpeg and ffprobe, a URL you own, one TOML file, and somewhere to be alerted: ntfy, a Discord webhook, email, or a generic webhook. No stream account, no provider API key, one Python file.
 
 The command line offers:
 
@@ -25,8 +25,6 @@ The command line offers:
 - **doctor** — inspect local binary versions and detector filters.
 - **check** — perform one bounded observation cycle.
 - **watch** — choose exactly one mode: **--max-cycles N** for a finite run (1–10,000 cycles), or **--continuous** for the authorized foreground 24/7 monitoring path. Both modes run one serial cycle at a time, keep the existing per-cycle and notification bounds, and flush one JSON observation line as each cycle completes. Continuous mode ends on Ctrl+C (exit 130, after owned-child and state cleanup) or a fatal persistence/sender-cleanup failure (exit 3 with a flushed error; sender-cleanup failure is persisted before stopping when the state write succeeds). It does not daemonize or automatically restart.
-
-These commands report observations; they do not control a stream, encoder, or OBS. No live source has been validated by this README.
 
 ## Install
 
@@ -91,6 +89,61 @@ A relative `tools.yt_dlp` path is resolved from DEAD AIR's process working direc
 
 yt-dlp is used only for supported YouTube sources. Provider changes can break extraction, and some formats may require a compatible JavaScript runtime. DEAD AIR does not import browser cookies or sign in to stream accounts. A public URL is not a promise that a provider will expose usable media.
 
+## First five minutes
+
+Run these from the project folder, with the interpreter you set up in Install.
+
+**1. Make your private config.** Copy the example. `dead-air.toml` is already in `.gitignore`.
+
+~~~sh
+cp dead-air.example.toml dead-air.toml
+~~~
+
+~~~powershell
+Copy-Item dead-air.example.toml dead-air.toml
+~~~
+
+In `[[streams]]`, set `url` to your stream. Set `source` to `"youtube"` for a youtube.com watch or live link or a youtu.be link (this needs yt-dlp, see Install), or to `"direct"` for an http(s) media URL that ffmpeg can read.
+
+At the bottom, uncomment one `[[destinations]]` block:
+
+- `ntfy`, `discord` or `webhook`: keep `id`, `type` and `endpoint_env`. `endpoint_env` is the name of an environment variable. Put the full HTTPS URL in that variable, in the shell that runs DEAD AIR. Never in the TOML.
+- `smtp`: keep `id`, `type`, `host`, `port`, `tls`, `sender` and `recipients`. If your server wants a login, add `username_env` and `password_env` together.
+
+Leave every destination commented out and notifications stay off.
+
+**2. Validate.**
+
+~~~sh
+python dead_air.py validate --config dead-air.toml
+~~~
+
+This parses the file. No network, no state writes. A good file prints `{"ok": true, "stream_count": 1}` for one stream. A bad one prints an `error` and exits 3.
+
+**3. Doctor.**
+
+~~~sh
+python dead_air.py doctor --config dead-air.toml
+~~~
+
+This looks for ffmpeg, ffprobe and yt-dlp, and checks that ffmpeg has the `freezedetect` and `silencedetect` filters. It prints `"network_contacted": false`. If you skipped yt-dlp because your stream is `direct`, `ok` will still be `false` and the exit code 3. For you, what matters is that `ffmpeg` and `ffprobe` show `"available": true` and `detector_filters_available` is `true`.
+
+**4. One check.**
+
+~~~sh
+python dead_air.py check --config dead-air.toml --json
+~~~
+
+This is the first step that touches the network: it samples your stream once and prints one line of JSON. The exit code is the short version: 0 means every stream is `HEALTHY`, 1 means `OFF_AIR` or `UNHEALTHY`, 2 means `UNKNOWN` or `DEGRADED`, 3 means the config or the state file is the problem. It also writes to the state file (`state/dead-air.sqlite3` in the example). On the example numbers (`min_bad_samples = 3`, `unhealthy_after_s = 180`), an off-air, freeze or silence alert needs at least three bad samples over at least 180 seconds, so one check will not page you.
+
+**5. The real thing.**
+
+~~~sh
+python dead_air.py watch --config dead-air.toml --continuous --json
+~~~
+
+This runs in the foreground, one cycle at a time, waits `interval_s` between cycles (60 seconds in the example), and prints one line of JSON per cycle. When a problem lasts long enough, it sends an alert to your destination. After `recovery_samples` good samples (2 in the example), it sends a recovery message. Ctrl+C stops it cleanly (exit 130, after owned-child and state cleanup). It does not daemonize and does not restart itself. Keeping it running, with systemd or Task Scheduler or whatever you like, is your call.
+
 ## First check
 
 The example is safe for a configuration smoke check:
@@ -115,6 +168,21 @@ python dead_air.py watch --config dead-air.toml --continuous --json
 ~~~
 
 Continuous mode is the foreground path for long-running monitoring; it is not evidence of a completed 24-hour soak or production readiness. An observation can make network requests to every configured target. Start with one check and a source you own or have permission to monitor. Review the configuration before using watch.
+
+## What it will not do
+
+So nothing surprises you at 3 a.m.
+
+- **Run your stream.** The commands report observations; they do not control a stream, encoder, or OBS.
+- **Be for other people's streams.** DEAD AIR is a bounded observer for streams you own or are authorized to monitor.
+- **Sign in or borrow your cookies.** DEAD AIR does not import browser cookies or sign in to stream accounts.
+- **Count UNKNOWN as HEALTHY.** A missing or inconclusive sample remains **UNKNOWN**, not **HEALTHY**. Remote captures include a 100 ms acquisition prefix followed by the configured full common measurement duration. Startup after that prefix, or missing or gapped decoded content in the measurement window, remains **UNKNOWN**. Use sustained samples and positive recovery before treating a source as restored.
+- **Let one good check hide a different problem.** It reports three independent conditions: off-air, frozen picture, and silence. Each condition has its own evidence and recovery path; a successful check in one does not clear another.
+- **Treat a thumbnail as proof.** When only a provider thumbnail is available, the result is degraded: a thumbnail cannot establish that the actual stream picture is moving.
+- **Promise exactly-once alerts.** Delivery is at-least-once: a receiver may accept a message before a connection fails, so a retry can duplicate it.
+- **Be a hostile-URL sandbox.** It trusts operator-owned configuration and local tool paths. Do not feed it untrusted URLs or configurations.
+- **Contain every Windows child process.** On Windows, stopping a direct child does not provide a general guarantee that every descendant process is contained or stopped.
+- **Vouch for a live source.** No live source has been validated by this README.
 
 ## Privacy and safety
 
