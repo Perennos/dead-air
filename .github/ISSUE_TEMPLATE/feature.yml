@@ -1,0 +1,46 @@
+name: Feature idea
+description: Propose a bounded improvement grounded in an operator need.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Describe the operator problem, not an assumed implementation. Use synthetic examples and do not include real stream URLs, private configuration, or personal data.
+  - type: textarea
+    id: need
+    attributes:
+      label: Operator need
+      description: What task is difficult or missing for a stream you own or are authorized to monitor?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Smallest useful change
+      description: Suggest a bounded behavior and explain what should remain out of scope.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Synthetic example or evidence
+      description: Give a fake observation, local fixture, or redacted example that demonstrates the need.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and risks
+      description: Note privacy, authorization, resource, accessibility, or opt-in requirements.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Data safety
+      options:
+        - label: I have not included real stream URLs, tokens, private configuration, raw traces, or personal data.
+          required: true

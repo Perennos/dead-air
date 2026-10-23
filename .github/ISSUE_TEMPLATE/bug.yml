@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible problem without exposing a real stream or private configuration.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Use synthetic data only. Do not include real stream URLs, tokens, private configuration, raw traces, or personal data.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What failed?
+      description: Describe the observed behavior and its impact.
+      placeholder: A concise, redacted description.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Synthetic reproduction
+      description: Give the command and steps using a fake sender, fake clock, or synthetic fixture. Do not contact a live endpoint.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should the CLI report or do?
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed output
+      description: Paste only redacted output; remove URLs, credentials, private paths, and personal data.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Python version, operating system, and sanitized command. Do not attach a private config.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Data safety
+      options:
+        - label: I used synthetic or authorized data and removed real URLs, tokens, private configuration, raw traces, and personal data.
+          required: true

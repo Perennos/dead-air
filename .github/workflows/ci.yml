@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    name: Source checks (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.11', '3.14']
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pinned requirements from official PyPI
+        run: python -m pip install --disable-pip-version-check --index-url https://pypi.org/simple -r requirements.txt
+      - name: Validate example from a fresh clean copy
+        run: >-
+          python -c "import pathlib,shutil,subprocess,sys,tempfile; src=pathlib.Path.cwd(); temporary=tempfile.TemporaryDirectory(); clean=pathlib.Path(temporary.name)/'clean'; clean.mkdir(); [shutil.copy2(src/name,clean/name) for name in ('dead_air.py','dead-air.example.toml','requirements.txt')]; subprocess.run([sys.executable,str(clean/'dead_air.py'),'validate','--config',str(clean/'dead-air.example.toml')],cwd=clean,check=True)"
+      - name: Run source suite
+        run: python -m unittest discover -s tests -p test_dead_air.py -v
+      - name: Run incident suite
+        run: python -m unittest discover -s tests -p test_incidents.py -v
+      - name: Run alert suite
+        run: python -m unittest discover -s tests -p test_alerts.py -v
+      - name: Run Windows native-media suite when tools are available
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
+          $ffprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
+          if ($null -eq $ffmpeg -or $null -eq $ffprobe) {
+            Write-Host "::notice::Native media tests skipped: ffmpeg and ffprobe are not both available on this Windows runner."
+          } else {
+            python -m unittest discover -s tests -p test_media.py -v
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+  full-discovery:
+    name: Full discovery with FFmpeg lavfi (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.14']
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install system FFmpeg and OpenSSL for local fixtures
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ffmpeg openssl
+      - name: Confirm local media tools
+        run: |
+          ffmpeg -version
+          ffprobe -version
+      - name: Install pinned requirements from official PyPI
+        run: python -m pip install --disable-pip-version-check --index-url https://pypi.org/simple -r requirements.txt
+      - name: Run full test discovery with synthetic media
+        run: python -m unittest discover -s tests -v

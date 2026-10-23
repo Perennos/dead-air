@@ -1,0 +1,22 @@
+Perennos DEAD AIR
+Copyright 2026 Perennos.
+
+The DEAD AIR source and original, hand-built artwork are licensed under the
+Apache License, Version 2.0; see LICENSE.
+
+The following third-party font software is distributed under the SIL Open
+Font License, Version 1.1. The OFL text is provided with each font notice
+under brand/licenses/.
+
+Unbounded
+Copyright 2022 The Unbounded Project Authors
+SIL Open Font License, Version 1.1
+See brand/licenses/Unbounded-OFL.txt.
+
+IBM Plex Mono subset, internally renamed Perennos Mono Subset
+Copyright © 2017 IBM Corp.
+Reserved Font Name: Plex
+SIL Open Font License, Version 1.1
+See brand/licenses/IBMPlexMono-OFL.txt.
+The CSS alias PlexMono is an alias for the renamed subset; it does not
+change the subset's internal family name or its license.

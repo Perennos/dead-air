@@ -1,0 +1,80 @@
+[watch]
+interval_s = 60
+sample_s = 12
+resolver_timeout_s = 20
+capture_timeout_s = 25
+analysis_timeout_s = 20
+max_sample_bytes = 25165824
+max_output_bytes = 262144
+cycle_budget_s = 60
+state_path = "state/dead-air.sqlite3"
+
+[storage]
+retention_days = 90 # resolved history only after all delivery rows are sent
+
+[tools]
+yt_dlp = "yt-dlp"
+ffmpeg = "ffmpeg"
+ffprobe = "ffprobe"
+
+[network]
+private_allowlist = []
+max_redirects = 3
+thumbnail_max_bytes = 1048576
+
+[[streams]]
+id = "sample-channel"
+label = "Sample channel"
+url = "https://example.invalid/live/sample"
+source = "direct"
+expected_live = true
+expect_audio = true
+expect_video = true
+detect_freeze = true
+freeze_noise = 0.001
+freeze_window_s = 8
+silence_db = -50
+silence_window_s = 8
+unhealthy_after_s = 180
+min_bad_samples = 3
+recovery_samples = 2
+max_gap_s = 180
+unknown_notice_after_s = 600
+offline_http_statuses = [410]
+thumbnail_enabled = false
+thumbnail_url = ""
+thumbnail_stale_after_s = 1800
+allow_private = false
+
+# Notifications are disabled until one or more destination tables are added.
+# Keep endpoints and credentials in the named environment variables below.
+# [[destinations]]
+# id = "ops-ntfy"
+# type = "ntfy"
+# endpoint_env = "DEAD_AIR_NTFY_URL"
+# token_env = "DEAD_AIR_NTFY_TOKEN" # optional; do not commit its value
+# allow_private = true # optional; still requires this exact HTTPS host:port in network.private_allowlist
+#
+# [[destinations]]
+# id = "ops-discord"
+# type = "discord"
+# endpoint_env = "DEAD_AIR_DISCORD_WEBHOOK_URL" # full webhook URL supplied by owner
+#
+# [[destinations]]
+# id = "ops-mail"
+# type = "smtp"
+# host = "smtp.example.invalid"
+# port = 587
+# tls = "starttls" # or "ssl"; plaintext is unsupported
+# sender = "dead-air@example.invalid"
+# recipients = ["ops@example.invalid"]
+# username_env = "DEAD_AIR_SMTP_USER" # optional; must pair with password_env
+# password_env = "DEAD_AIR_SMTP_PASSWORD"
+# allow_private = true # optional; still requires this exact TLS host:port in network.private_allowlist
+#
+# [[destinations]]
+# id = "ops-webhook"
+# type = "webhook"
+# endpoint_env = "DEAD_AIR_WEBHOOK_URL"
+# token_env = "DEAD_AIR_WEBHOOK_TOKEN" # optional bearer token
+# allow_private = true # optional; still requires this exact HTTPS host:port in network.private_allowlist
