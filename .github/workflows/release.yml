@@ -48,7 +48,7 @@ jobs:
               )
           }
           forbidden = re.compile(
-              r"(^|/)(?:\.git|\.env[^/]*|local[-_]?state[^/]*)(?:/|$)"
+              r"(^|/)(?:\.git|\.env[^/]*|state|local[-_]?state[^/]*|dead-air\.toml|[^/]+\.local\.toml)(?:/|$)"
               r"|\.(?:sqlite3?|db|log)(?:[-.][^/]*)?(?:/|$)",
               re.IGNORECASE,
           )
@@ -147,7 +147,7 @@ jobs:
               )
           }
           forbidden = re.compile(
-              r"(^|/)(?:\.git|\.env[^/]*|local[-_]?state[^/]*)(?:/|$)"
+              r"(^|/)(?:\.git|\.env[^/]*|state|local[-_]?state[^/]*|dead-air\.toml|[^/]+\.local\.toml)(?:/|$)"
               r"|\.(?:sqlite3?|db|log)(?:[-.][^/]*)?(?:/|$)",
               re.IGNORECASE,
           )
