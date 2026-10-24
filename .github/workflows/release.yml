@@ -70,7 +70,7 @@ jobs:
 
           with tarfile.open("dead-air-v0.1.0.tar.gz", "r:gz") as archive:
               members = archive.getmembers()
-              check_members("tar.gz", [member.name for member in members])
+              check_members("tar.gz", [member.name + "/" if member.isdir() else member.name for member in members])
               if any(not (member.isfile() or member.isdir()) for member in members):
                   raise SystemExit("tar.gz: non-file member")
               source = archive.extractfile(prefix + "dead_air.py")
@@ -169,7 +169,7 @@ jobs:
 
           with tarfile.open("dead-air-v0.1.0.tar.gz", "r:gz") as archive:
               members = archive.getmembers()
-              check_members("tar.gz", [member.name for member in members])
+              check_members("tar.gz", [member.name + "/" if member.isdir() else member.name for member in members])
               if any(not (member.isfile() or member.isdir()) for member in members):
                   raise SystemExit("tar.gz: non-file member")
               source = archive.extractfile(prefix + "dead_air.py")
