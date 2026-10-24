@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-import dead_air
+from . import engine as dead_air
 
 
 _STATUSES = {"HEALTHY", "UNHEALTHY", "OFF_AIR", "UNKNOWN", "DEGRADED", "NOT_APPLICABLE"}
@@ -40,7 +40,7 @@ def _stream_status(stream: dead_air.StreamConfig, state: dict[str, Any], when: f
     elif age > stream.max_gap_s:
         reason = "OBSERVATION_STALE"
     raw_status = latest.get("status", "UNKNOWN")
-    status = raw_status if raw_status in _STATUSES - {"NOT_APPLICABLE"} else "UNKNOWN"
+    status = raw_status if isinstance(raw_status, str) and raw_status in _STATUSES - {"NOT_APPLICABLE"} else "UNKNOWN"
     at = latest.get("observed_at")
     # Do not pass arbitrary stored strings into output or terminal escape sequences.
     if not isinstance(at, str) or not re.fullmatch(r"[0-9T:.+Z-]{1,40}", at):

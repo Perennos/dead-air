@@ -150,7 +150,7 @@ class PersistenceOperationsTests(unittest.TestCase):
                 self.assertEqual(store.open_incidents(), [])
 
     def test_read_only_status_during_watch_preserves_counters_and_reports_deliveries(self):
-        from dead_air_status import read_status
+        from deadair.status import read_status
         from test_incidents import config, observation, silence
         destination = dead_air.DestinationConfig("ops", "webhook", endpoint_env="FIXTURE_URL")
         cfg = config(min_bad=1, unhealthy=0, recovery=2, destinations=(destination,))
@@ -176,7 +176,7 @@ class PersistenceOperationsTests(unittest.TestCase):
                 self.assertEqual(snapshot["streams"][0]["observation_status"], "HEALTHY")
 
     def test_status_marks_absent_stale_rollback_and_changed_sources_unknown(self):
-        from dead_air_status import read_status
+        from deadair.status import read_status
         from test_incidents import observation
         with tempfile.TemporaryDirectory() as directory:
             cfg = test_config()
@@ -220,6 +220,61 @@ class PersistenceOperationsTests(unittest.TestCase):
                     self.assertIn("sample-channel", output.getvalue())
                     self.assertIn("HEALTHY", output.getvalue())
                     self.assertFalse(output.getvalue().startswith("{"))
+
+
+class LifecycleOperationsTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "linux", "Linux process-state inspection")
+    def test_exited_parent_cannot_leave_an_owned_descendant_holding_pipes(self):
+        import signal
+        code = ("import subprocess,sys; child=subprocess.Popen([sys.executable,'-c',"
+                "'import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(30)']); "
+                "print(child.pid,flush=True)")
+        result = dead_air.run_bounded([sys.executable, "-c", code], 2, max_output_bytes=256)
+        pid = int(result.stdout.strip())
+        try:
+            process = Path(f"/proc/{pid}/stat")
+            state = process.read_text().rsplit(")", 1)[1].split()[0] if process.exists() else None
+            self.assertIn(state, (None, "Z"), "owned descendant remained running")
+            self.assertTrue(result.cleanup_complete)
+        finally:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    def test_init_creates_valid_config_without_overwriting_an_existing_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private.toml"
+            with patch("sys.stdout", io.StringIO()):
+                self.assertEqual(dead_air.main(["init", "--config", str(path)]), 0)
+            self.assertEqual(len(dead_air.load_config(path).streams), 1)
+            original = path.read_bytes()
+            with patch("sys.stdout", io.StringIO()):
+                self.assertEqual(dead_air.main(["init", "--config", str(path)]), 3)
+            self.assertEqual(path.read_bytes(), original)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX service signal regression")
+    def test_sigterm_cleans_owned_state_and_restores_previous_handler(self):
+        import signal
+        config = test_config()
+        previous = signal.getsignal(signal.SIGTERM)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            config = dataclasses.replace(config, watch=dataclasses.replace(config.watch, state_path=str(path)))
+            def interrupted(_config, **_kwargs):
+                os.kill(os.getpid(), signal.SIGTERM)
+                return ()
+            with patch.object(dead_air, "load_config", return_value=config), \
+                    patch.object(dead_air, "check_cycle", side_effect=interrupted):
+                self.assertEqual(dead_air.main(["check", "--json"]), 143)
+            self.assertIs(signal.getsignal(signal.SIGTERM), previous)
+            with dead_air.IncidentStore(path):
+                pass
+
+    def test_package_modules_import_independently(self):
+        for name in ("deadair.persistence", "deadair.config", "deadair.status"):
+            result = subprocess.run([sys.executable, "-c", f"import {name}"], capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
 
 
 if __name__ == "__main__":

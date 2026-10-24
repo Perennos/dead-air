@@ -642,6 +642,7 @@ class ProcessAndPolicyTests(unittest.TestCase):
 
         class ExitedChild:
             returncode = 0
+            pid = 12345
 
             def __init__(self):
                 self.stdout = DelayedPipe(b"progress=end\n")
@@ -652,7 +653,8 @@ class ProcessAndPolicyTests(unittest.TestCase):
                 return self.returncode
 
         child = ExitedChild()
-        with patch.object(dead_air.subprocess, "Popen", return_value=child):
+        with patch.object(dead_air.subprocess, "Popen", return_value=child), \
+                patch.object(dead_air.os, "killpg", create=True):
             result = dead_air.run_bounded([sys.executable, "-c", "pass"], 1, max_output_bytes=256)
         self.assertTrue(result.cleanup_complete)
         self.assertIn("freeze_start", result.stderr)
