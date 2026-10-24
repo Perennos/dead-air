@@ -8,6 +8,9 @@
     incident: ['/brand/mark-dead.svg', 'Stream in alert: red eyes', ''],
     uncertain: ['/brand/mark.svg', 'Stream state uncertain: dimmed mark', 'is-dim'],
   };
+  let flash = '';
+  let running = false;
+  let stopped = false;
   const OUTCOME = { sent: 'sent', failed: 'failed', pending: 'queued' };
   const HINTS = {
     ENDPOINT_UNAVAILABLE: 'the variable that holds this destination\'s URL is not set for this program',
@@ -91,8 +94,17 @@
   function render(s) {
     const count = s.stream_count + (s.stream_count === 1 ? ' stream' : ' streams');
     const cycle = s.last_cycle ? 'last cycle ' + when.format(new Date(s.last_cycle)) : 'no cycle yet';
-    $('band-stats').textContent = (s.watching ? 'watching ' + count : count + ', not watching') + ' · ' + cycle;
-    if (s.config_missing) notice('No config file at ' + s.config_path + '. Adding a stream below creates it.', false);
+    const w = s.watcher;
+    running = w.running;
+    const since = running ? new Date(w.started_at) : null;
+    let lead = count + ', not watching';
+    if (running) lead = 'watching ' + count + ' since ' + new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(since);
+    else if (s.watching) lead = 'watching ' + count + ', started elsewhere';
+    $('band-stats').textContent = lead + ' · ' + cycle;
+    $('watch-toggle').textContent = running ? 'Stop watching' : 'Start watching';
+    if (flash) notice(flash, true);
+    else if (!running && w.last_line && w.last_line.error) notice('The watcher stopped: ' + w.last_line.error, true);
+    else if (s.config_missing) notice('No config file at ' + s.config_path + '. Adding a stream below creates it.', false);
     else if (s.config_error) notice('The config at ' + s.config_path + ' could not be loaded: ' + s.config_error, true);
     else if (s.state_error) notice('The state file could not be read (' + s.state_error + '). Statuses may be out of date.', true);
     else notice('', false);
@@ -146,6 +158,29 @@
     node.textContent = text;
     node.className = isError ? 'msg is-error' : 'msg';
   };
+  $('watch-toggle').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    try {
+      const response = await post('/api/watch', { action: running ? 'stop' : 'start' });
+      const body = await response.json();
+      flash = response.ok ? '' : (body.error || 'The watcher could not change state.');
+    } catch (err) {
+      flash = 'Could not reach Dead Air. Is the program still running?';
+    } finally {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+    }
+    await refresh();
+  });
+
+  $('quit').addEventListener('click', async () => {
+    stopped = true;
+    try { await post('/api/quit'); } catch (err) { /* the server may close first */ }
+    document.body.replaceChildren(el('p', 'note', 'Dead Air has stopped. You can close this tab.'));
+  });
+
   $('add-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -154,12 +189,13 @@
     button.disabled = true;
     button.setAttribute('aria-busy', 'true');
     message('', false);
+    $('form-ok').textContent = '';
     try {
       const response = await post('/api/streams', { name, url: $('stream-url').value, source: $('stream-source').value });
       const body = await response.json();
       if (response.ok) {
         form.reset();
-        message('Added ' + name.trim() + '.', false);
+        $('form-ok').textContent = 'Added ' + name.trim() + '.';
         await refresh();
         $('stream-name').focus();
       } else {
@@ -173,7 +209,7 @@
     }
   });
 
-  setInterval(() => { if (!document.hidden) refresh(); }, 15000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+  setInterval(() => { if (!document.hidden && !stopped) refresh(); }, 15000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && !stopped) refresh(); });
   refresh();
 })();

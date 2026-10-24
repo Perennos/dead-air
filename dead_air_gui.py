@@ -7,6 +7,7 @@ a test alert only when the user clicks the button. It does not run checks; `watc
 
 from __future__ import annotations
 
+import errno
 import hmac
 import json
 import os
@@ -14,11 +15,14 @@ import re
 import secrets
 import shutil
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
 import time
 import tomllib
 import urllib.parse
+import urllib.request
 import webbrowser
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,8 +41,12 @@ PAGES = {
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
 }
 BRAND = frozenset({"mark.svg", "mark-dead.svg", "favicon.svg"})
+DEFAULT_PORT = 47824
+IDLE_S = 30 * 60
 SECURITY_HEADERS = (
-    ("Content-Security-Policy", "default-src 'self'; img-src 'self' data:"),
+    ("Content-Security-Policy",
+     "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; form-action 'self'; base-uri 'none'"),
+    ("X-Frame-Options", "DENY"),
     ("X-Content-Type-Options", "nosniff"),
     ("Referrer-Policy", "no-referrer"),
     ("Cache-Control", "no-store"),
@@ -49,6 +57,90 @@ CONDITIONS = {"off_air": "off-air", "video_freeze": "frozen", "video_missing": "
               "unknown": "unknown"}
 RED = tuple(CONDITIONS)[:5]
 _WRITE = threading.Lock()
+_WATCH = threading.Lock()
+
+
+class Server(ThreadingHTTPServer):
+    allow_reuse_address = os.name != "nt"  # on Windows SO_REUSEADDR would let a second server share the port
+    child = None  # the one watcher process this server owns
+    started_at = log_path = lock_path = None
+
+
+def watch_argv(config_path: Path) -> list[str]:
+    return [sys.executable, str(HERE / "dead_air.py"), "watch", "--config", str(config_path), "--continuous", "--json"]
+
+
+def _running(server: Server) -> bool:
+    return server.child is not None and server.child.poll() is None
+
+
+def start_watch(server: Server) -> tuple[int, dict[str, Any]]:
+    with _WATCH:
+        if _running(server):
+            return 409, {"error": "Already watching."}
+        try:
+            config = dead_air.load_config(server.config_path)
+        except dead_air.ConfigError as exc:
+            return 400, {"error": str(exc)}
+        state = Path(config.watch.state_path).absolute()
+        lock = state.parent / ".dead-air.lock"
+        if lock.exists():
+            return 409, {"error": "Already watched by another process."}
+        try:
+            state.parent.mkdir(parents=True, exist_ok=True)
+            with (state.parent / "dead-air-watch.log").open("wb") as log:  # truncated on each start
+                server.child = subprocess.Popen(
+                    watch_argv(server.config_path), stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                    start_new_session=os.name == "posix", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except OSError:
+            return 500, {"error": "could not start the watcher"}
+        server.log_path, server.lock_path, server.started_at = state.parent / "dead-air-watch.log", lock, dead_air.utc_now()
+    return 200, {"ok": True}
+
+
+def stop_watch(server: Server) -> tuple[int, dict[str, Any]]:
+    with _WATCH:
+        child = server.child
+        if child is None or child.poll() is not None:
+            return 200, {"ok": True}
+        if not dead_air._terminate_and_reap(child):  # the core's own helper for owned children
+            return 500, {"error": "The watcher did not stop."}
+        try:  # a killed watcher cannot release its lock; remove it only if it is the one we started
+            if f"pid={child.pid}" in server.lock_path.read_text(encoding="ascii"):
+                server.lock_path.unlink()
+        except (OSError, UnicodeError, AttributeError):
+            pass
+    return 200, {"ok": True}
+
+
+def watcher_info(server: Server) -> dict[str, Any]:
+    running, last = _running(server), None
+    if server.log_path:
+        try:
+            with server.log_path.open("rb") as log:
+                log.seek(0, os.SEEK_END)
+                log.seek(max(0, log.tell() - 262144))
+                lines = log.read().decode("utf-8", "replace").splitlines()
+            for line in reversed(lines):
+                try:
+                    parsed = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(parsed, dict):
+                    last = parsed
+                    break
+        except OSError:
+            pass
+    return {"running": running, "pid": server.child.pid if running else None,
+            "started_at": server.started_at if running else None, "last_line": last}
+
+
+def _idle_loop(server: Server) -> None:
+    """Stop the server after idle_s without a request, but never while the watcher child is running."""
+    while not server.done.wait(min(1.0, server.idle_s / 4)):
+        if not _running(server) and time.monotonic() - server.last_request > server.idle_s:
+            server.shutdown()
+            return
 
 
 def _iso(timestamp: Any) -> str | None:
@@ -250,11 +342,14 @@ class Handler(BaseHTTPRequestHandler):
         return origin is None or origin.lower() in {f"http://{n}:{self.server.server_port}" for n in LOCAL_NAMES}
 
     def do_GET(self) -> None:
+        self.server.last_request = time.monotonic()
         if not self._host_ok():
             return self._json(421, {"error": "unexpected Host"})
         path = urllib.parse.urlsplit(self.path).path
+        if path == "/api/ping":
+            return self._json(200, {"app": "dead-air"})
         if path == "/api/state":
-            return self._json(200, snapshot(self.server.config_path))
+            return self._json(200, dict(snapshot(self.server.config_path), watcher=watcher_info(self.server)))
         if path in PAGES:
             filename, content_type = PAGES[path]
             file = HERE / "gui" / filename
@@ -271,6 +366,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, content_type, body)
 
     def do_POST(self) -> None:
+        self.server.last_request = time.monotonic()
         self.close_connection = True
         try:
             length = int(self.headers.get("Content-Length", ""))
@@ -293,11 +389,24 @@ class Handler(BaseHTTPRequestHandler):
         if length > MAX_BODY:
             return self._json(413, {"error": "request body too large"})
         path = urllib.parse.urlsplit(self.path).path
-        if path not in ("/api/streams", "/api/test-alerts"):
+        if path not in ("/api/streams", "/api/test-alerts", "/api/watch", "/api/quit"):
             return self._json(404, {"error": "not found"})
         try:
             if path == "/api/test-alerts":
                 status, payload = send_test_alerts(self.server.config_path)
+            elif path == "/api/quit":
+                status, payload = stop_watch(self.server)
+                if status == 200:
+                    threading.Thread(target=self.server.shutdown, daemon=True).start()
+            elif path == "/api/watch":
+                try:
+                    data = json.loads(body.decode("utf-8"))
+                except ValueError:
+                    data = None
+                action = data.get("action") if isinstance(data, dict) else None
+                if action not in ("start", "stop"):
+                    return self._json(400, {"error": "action must be start or stop"})
+                status, payload = (start_watch if action == "start" else stop_watch)(self.server)
             else:
                 try:
                     data = json.loads(body.decode("utf-8"))
@@ -311,21 +420,47 @@ class Handler(BaseHTTPRequestHandler):
         self._json(status, payload)
 
 
-def make_server(config_path: str | os.PathLike[str], port: int = 0) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+def make_server(config_path: str | os.PathLike[str], port: int = DEFAULT_PORT, idle_s: float = IDLE_S) -> Server:
+    server = Server(("127.0.0.1", port), Handler)
     server.token = secrets.token_urlsafe(32)
     server.config_path = Path(config_path).absolute()
+    server.idle_s, server.last_request, server.done = idle_s, time.monotonic(), threading.Event()
     return server
 
 
-def serve(config_path: str | os.PathLike[str], port: int = 0, open_browser: bool = True) -> int:
+def _already_running(port: int, open_browser: bool) -> int:
+    """The port is taken: if it is another Dead Air, open its page; otherwise say so."""
+    url = f"http://127.0.0.1:{port}/"
     try:
-        server = make_server(config_path, port)
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(url + "api/ping", timeout=2) as reply:
+            ours = json.loads(reply.read(1024)).get("app") == "dead-air"
+    except (OSError, ValueError, AttributeError):
+        ours = False
+    if not ours:
+        print(json.dumps({"ok": False, "error": f"port {port} is in use by another program; use --port N"}))
+        return 2
+    print(f"DEAD AIR GUI: {url}", flush=True)
+    if open_browser:
+        webbrowser.open(url)
+    return 0
+
+
+def serve(config_path: str | os.PathLike[str], port: int = DEFAULT_PORT, open_browser: bool = True,
+          watch: bool = False, idle_s: float = IDLE_S) -> int:
+    try:
+        server = make_server(config_path, port, idle_s)
     except (OSError, OverflowError) as exc:
+        if isinstance(exc, OSError) and exc.errno in (errno.EADDRINUSE, 10048):
+            return _already_running(port, open_browser)
         print(json.dumps({"ok": False, "error": f"cannot listen on 127.0.0.1:{port} ({type(exc).__name__})"}))
         return 3
     url = f"http://127.0.0.1:{server.server_port}/"
     print(f"DEAD AIR GUI: {url}", flush=True)
+    if watch:
+        status, payload = start_watch(server)
+        if status != 200:
+            print(json.dumps({"ok": False, "error": payload["error"]}), flush=True)
+    threading.Thread(target=_idle_loop, args=(server,), daemon=True).start()
     if open_browser:
         webbrowser.open(url)
     try:
@@ -333,5 +468,7 @@ def serve(config_path: str | os.PathLike[str], port: int = 0, open_browser: bool
     except KeyboardInterrupt:
         pass
     finally:
+        stop_watch(server)
+        server.done.set()
         server.server_close()
     return 0

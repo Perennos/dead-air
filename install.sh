@@ -46,6 +46,8 @@ if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; 
 fi
 
 echo "Step 3: launcher"
+FLAG=
+if grep -q '^\[\[streams\]\]' dead-air.toml 2>/dev/null; then FLAG=" --watch"; echo "  (dead-air.toml has a stream, so the launcher starts watching)"; fi
 PYV="$ROOT/.venv/bin/python"
 if [ "$(uname -s)" = "Darwin" ]; then
     DIR=${INSTALL_SHORTCUT_DIR:-$HOME/Desktop}
@@ -54,7 +56,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
         echo "[dry-run] would write $FILE"
     else
         mkdir -p "$DIR"
-        printf '#!/bin/bash\ncd "%s" || exit 1\nexec "%s" dead_air.py gui --config dead-air.toml\n' "$ROOT" "$PYV" > "$FILE"
+        printf '#!/bin/bash\ncd "%s" || exit 1\nexec "%s" dead_air.py gui --config dead-air.toml%s\n' "$ROOT" "$PYV" "$FLAG" > "$FILE"
         chmod +x "$FILE"
         echo "  $FILE"
     fi
@@ -65,8 +67,8 @@ else
         echo "[dry-run] would write $FILE"
     else
         mkdir -p "$DIR"
-        printf '[Desktop Entry]\nType=Application\nName=Dead Air\nComment=DEAD AIR stream watchdog\nExec="%s" "%s/dead_air.py" gui --config "%s/dead-air.toml"\nPath=%s\nIcon=%s/brand/favicon.svg\nTerminal=false\nCategories=AudioVideo;Monitor;\n' \
-            "$PYV" "$ROOT" "$ROOT" "$ROOT" "$ROOT" > "$FILE"
+        printf '[Desktop Entry]\nType=Application\nName=Dead Air\nComment=DEAD AIR stream watchdog\nExec="%s" "%s/dead_air.py" gui --config "%s/dead-air.toml"%s\nPath=%s\nIcon=%s/brand/favicon.svg\nTerminal=false\nCategories=AudioVideo;Monitor;\n' \
+            "$PYV" "$ROOT" "$ROOT" "$FLAG" "$ROOT" "$ROOT" > "$FILE"
         chmod +x "$FILE"
         echo "  $FILE"
     fi
@@ -75,5 +77,5 @@ fi
 echo
 if [ "$DRY" = 1 ]; then echo "[dry-run] Done. Nothing was changed."; exit 0; fi
 echo "Done. Open Dead Air from the launcher above."
-echo "The page shows what the watcher has recorded. To run the checks, start the watcher:"
-echo "  .venv/bin/python dead_air.py watch --config dead-air.toml --continuous"
+echo "Add your stream in the page, then press Start watching. The page runs the watcher for you."
+echo "Without the page: .venv/bin/python dead_air.py watch --config dead-air.toml --continuous"

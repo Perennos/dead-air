@@ -64,6 +64,14 @@ class InstallCmdTests(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(self.dir)), before)
         self.assertFalse((self.dir / ".venv").exists())
 
+    def test_the_shortcut_passes_watch_only_when_the_config_already_has_a_stream(self):
+        _, output = self.run_install("/dry-run")
+        self.assertIn("running: dead_air.py gui --config dead-air.toml", output)
+        self.assertNotIn("--watch", output)
+        (self.dir / "dead-air.toml").write_text("[[streams]]\nid = \"a\"\n", encoding="ascii")
+        _, output = self.run_install("/dry-run")
+        self.assertIn("running: dead_air.py gui --config dead-air.toml --watch", output)
+
     def test_missing_ffmpeg_prints_the_official_page_and_the_winget_line_and_continues(self):
         path = path_without("ffmpeg.exe", "ffprobe.exe")
         if not shutil.which("py", path=path) and not shutil.which("python", path=path):
@@ -167,6 +175,13 @@ class InstallShTests(unittest.TestCase):
         self.assertRegex(entry, r"(?m)^Path=.*/repo copy$")
         self.assertIn("Name=Dead Air", entry)
         self.assertIn("Terminal=false", entry)
+
+    def test_launchers_pass_watch_only_when_the_config_already_has_a_stream(self):
+        (self.dir / "dead-air.toml").write_text("[[streams]]\nid = \"a\"\n", encoding="ascii")
+        self.assertEqual(self.run_install()[0].returncode, 0)
+        self.assertRegex((self.shortcuts / "dead-air.desktop").read_text(), r'(?m)^Exec=.*dead-air\.toml" --watch$')
+        self.assertEqual(self.run_install(system="Darwin")[0].returncode, 0)
+        self.assertRegex((self.shortcuts / "Dead Air.command").read_text(), r"(?m)^exec .*dead-air\.toml --watch$")
 
     def test_macos_install_writes_a_command_file_that_starts_the_gui_in_the_repo(self):
         result, output = self.run_install(system="Darwin")

@@ -12,7 +12,7 @@
 A 24/7 stream watchdog: off-air, frozen picture, silence.</p>
 
 1. Double-click `install.cmd` (macOS/Linux: `bash install.sh`).
-2. Click the Dead Air shortcut, add your stream, press **Test my alerts**.
+2. Click the Dead Air shortcut, add your stream, press **Start watching**, then **Test my alerts**.
 
 The GUI is a local page on 127.0.0.1 only.
 
@@ -154,13 +154,14 @@ This runs in the foreground, one cycle at a time, waits `interval_s` between cyc
 
 `install.cmd` (or `bash install.sh`) makes a `.venv`, installs `requirements.txt` and adds a Dead Air shortcut: Start menu and Desktop on Windows, a `.desktop` launcher on Linux, `Dead Air.command` on the macOS Desktop. It checks for ffmpeg and ffprobe and prints where to get them; it never installs them or Python. `install.cmd /dry-run` and `bash install.sh --dry-run` show the steps and change nothing. Python 3.11 or newer is required.
 
-The shortcut runs `python dead_air.py gui --config dead-air.toml`: a page on 127.0.0.1 only (`--port N` picks the port, `--no-browser` skips opening one). Every run has its own token, which the page sends with each change; requests with another Host or Origin are refused.
+The shortcut runs `python dead_air.py gui --config dead-air.toml`: a page on 127.0.0.1 only, port 47824 (`--port N` picks another, `--no-browser` skips opening one, `--watch` starts watching at launch; the installer adds it only when `dead-air.toml` already has a stream). Starting it again while it runs just opens the same page. Every run has its own token, which the page sends with each change; requests with another Host or Origin are refused, and the page cannot be framed.
 
+- **Start watching / Stop watching.** The page runs one `watch --continuous` child of its own (output in `dead-air-watch.log` beside the state file, cleared on each start) and says "Watching since" its start time, or that it is not watching. It will not start if another process already holds the state file. **Quit** stops the watcher and the page; closing the tab does not. The page stops itself after 30 minutes without a request unless its watcher is running.
 - **Status.** Each stream shows its status, open incidents, last alert and last check, read from the state file without writing to it.
 - **Add a stream.** The entry is checked by the same loader as `validate`, then `dead-air.toml` is replaced in one step. If the file does not exist it is created from `dead-air.example.toml`, pointing `yt_dlp` at this folder's `.venv` when yt-dlp is installed there. Destinations are not edited; add them to the TOML as in First five minutes.
 - **Test my alerts.** Sends one labelled test alert through each destination, one attempt each. This is the only network action the page takes, and only on that click. Endpoints are read from environment variables, so the shortcut needs them set too, or the test reports `ENDPOINT_UNAVAILABLE`.
 
-The page does not run checks. Start the watcher as in First five minutes, step 5; until it has recorded a cycle the page says "not watching". The state file comes from `watch.state_path` relative to where each program starts, so start both from the project folder, as the shortcut does.
+A watcher you start yourself (First five minutes, step 5) also works; the page shows its cycles but cannot stop it. The state file comes from `watch.state_path` relative to where each program starts, so start both from the project folder, as the shortcut does.
 
 ## First check
 

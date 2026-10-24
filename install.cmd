@@ -43,16 +43,19 @@ if defined NEEDFF (
     echo.
 )
 
+set "DA_ARGS=dead_air.py gui --config dead-air.toml"
+if exist dead-air.toml findstr /b /l /c:"[[streams]]" dead-air.toml >nul 2>&1 && set "DA_ARGS=%DA_ARGS% --watch"
 if defined DRY (
     echo [dry-run] Step 3: create "Dead Air.lnk" in the Start menu and on the Desktop,
+    echo [dry-run]         running: %DA_ARGS%
     echo [dry-run]         or under the INSTALL_SHORTCUT_DIR folder when that variable is set
     echo [dry-run] Done. Nothing was changed.
     exit /b 0
 )
 echo Step 3: creating the Dead Air shortcuts
-powershell -NoProfile -Command "$ErrorActionPreference = 'Stop'; if ($env:INSTALL_SHORTCUT_DIR) { $dirs = @((Join-Path $env:INSTALL_SHORTCUT_DIR 'Start Menu'), (Join-Path $env:INSTALL_SHORTCUT_DIR 'Desktop')) } else { $dirs = @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Desktop')) }; $shell = New-Object -ComObject WScript.Shell; foreach ($d in $dirs) { New-Item -ItemType Directory -Force -Path $d | Out-Null; $path = Join-Path $d 'Dead Air.lnk'; $l = $shell.CreateShortcut($path); $l.TargetPath = Join-Path $env:ROOT '.venv\Scripts\pythonw.exe'; $l.Arguments = 'dead_air.py gui --config dead-air.toml'; $l.WorkingDirectory = $env:ROOT; $l.IconLocation = (Join-Path $env:ROOT 'brand\icon.ico') + ',0'; $l.Description = 'DEAD AIR stream watchdog'; $l.Save(); Write-Output ('  ' + $path) }" || exit /b 1
+powershell -NoProfile -Command "$ErrorActionPreference = 'Stop'; if ($env:INSTALL_SHORTCUT_DIR) { $dirs = @((Join-Path $env:INSTALL_SHORTCUT_DIR 'Start Menu'), (Join-Path $env:INSTALL_SHORTCUT_DIR 'Desktop')) } else { $dirs = @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Desktop')) }; $shell = New-Object -ComObject WScript.Shell; foreach ($d in $dirs) { New-Item -ItemType Directory -Force -Path $d | Out-Null; $path = Join-Path $d 'Dead Air.lnk'; $l = $shell.CreateShortcut($path); $l.TargetPath = Join-Path $env:ROOT '.venv\Scripts\pythonw.exe'; $l.Arguments = $env:DA_ARGS; $l.WorkingDirectory = $env:ROOT; $l.IconLocation = (Join-Path $env:ROOT 'brand\icon.ico') + ',0'; $l.Description = 'DEAD AIR stream watchdog'; $l.Save(); Write-Output ('  ' + $path) }" || exit /b 1
 echo.
 echo Done. Open Dead Air from the Start menu or the Desktop.
-echo The page shows what the watcher has recorded. To run the checks, start the watcher:
-echo   .venv\Scripts\python.exe dead_air.py watch --config dead-air.toml --continuous
+echo Add your stream in the page, then press Start watching. The page runs the watcher for you.
+echo Without the page: .venv\Scripts\python.exe dead_air.py watch --config dead-air.toml --continuous
 exit /b 0

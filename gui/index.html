@@ -12,7 +12,11 @@
 <header class="band">
   <h1 class="title">DEAD AIR</h1>
   <p class="band-stats" id="band-stats">Loading</p>
-  <button type="button" class="btn btn-test" id="test-alerts">Test my alerts</button>
+  <div class="band-actions">
+    <button type="button" class="btn" id="watch-toggle">Start watching</button>
+    <button type="button" class="btn btn-quiet" id="test-alerts">Test my alerts</button>
+    <button type="button" class="btn btn-quiet" id="quit">Quit</button>
+  </div>
 </header>
 <main class="page">
   <p class="note" id="notice" aria-live="polite" hidden></p>
@@ -47,6 +51,7 @@
       </div>
       <button type="submit" class="btn" id="add-submit">Add stream</button>
       <p class="msg" id="form-msg" aria-live="polite"></p>
+      <p class="sr-only" id="form-ok" aria-live="polite"></p>
     </form>
   </section>
   <noscript><p class="note is-error">This page needs JavaScript to show your streams.</p></noscript>

@@ -65,6 +65,7 @@ class GuiTestCase(unittest.TestCase):
         self.addCleanup(thread.join, 5)
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
+        self.addCleanup(dead_air_gui.stop_watch, self.server)
 
     def request(self, method, path, body=None, headers=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
@@ -134,7 +135,9 @@ class PageAndHeaderTests(GuiTestCase):
 
     def test_security_headers_on_every_kind_of_response(self):
         wanted = {
-            "Content-Security-Policy": "default-src 'self'; img-src 'self' data:",
+            "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; "
+                                      "form-action 'self'; base-uri 'none'",
+            "X-Frame-Options": "DENY",
             "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "no-referrer",
             "Cache-Control": "no-store",
@@ -419,6 +422,151 @@ class TestAlertTests(GuiTestCase):
             self.get_json()
             self.add()
         sender.assert_not_called()
+
+
+FAKE_WATCHER = "import time\nwhile True:\n    print('{\"observations\": []}', flush=True)\n    time.sleep(0.2)\n"
+
+
+class WatcherTests(GuiTestCase):
+    """The page owns one watcher child; here the child is a tiny script that prints a JSON line every 0.2 s."""
+
+    def setUp(self):
+        super().setUp()
+        self.script = self.dir / "fake_watch.py"
+        self.script.write_text(FAKE_WATCHER, encoding="utf-8")
+        patcher = patch.object(dead_air_gui, "watch_argv", lambda _config: [sys.executable, str(self.script)])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def watch(self, action):
+        return self.post("/api/watch", {"action": action})
+
+    def wait_for(self, condition, seconds=10):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if condition():
+                return True
+            time.sleep(0.1)
+        return False
+
+    def test_start_reports_a_running_pid_and_the_last_log_line_then_stop_ends_the_child(self):
+        self.assertEqual(self.get_json()["watcher"], {"running": False, "pid": None, "started_at": None, "last_line": None})
+        self.assertEqual(self.watch("start"), (200, {"ok": True}))
+        child = self.server.child
+        info = self.get_json()["watcher"]
+        self.assertEqual((info["running"], info["pid"]), (True, child.pid))
+        self.assertRegex(info["started_at"], r"Z$")
+        self.assertTrue(self.wait_for(lambda: self.get_json()["watcher"]["last_line"] == {"observations": []}))
+        self.assertEqual(self.watch("start")[0], 409)
+        self.assertEqual(self.watch("stop"), (200, {"ok": True}))
+        self.assertTrue(self.wait_for(lambda: child.poll() is not None))
+        self.assertEqual(self.get_json()["watcher"]["running"], False)
+        self.assertEqual(self.watch("stop")[0], 200)  # stopping nothing is fine
+
+    def test_start_is_refused_while_another_process_holds_the_state(self):
+        self.state.parent.mkdir(parents=True)
+        (self.state.parent / ".dead-air.lock").write_text("token\tpid=1\n")
+        status, payload = self.watch("start")
+        self.assertEqual(status, 409)
+        self.assertIn("another process", payload["error"])
+        self.assertIsNone(self.server.child)
+
+    def test_a_killed_watchers_own_lock_is_removed_on_stop_but_nobody_elses(self):
+        self.assertEqual(self.watch("start")[0], 200)
+        lock = self.state.parent / ".dead-air.lock"
+        lock.write_text(f"token\tpid={self.server.child.pid}\n")
+        self.assertEqual(self.watch("stop")[0], 200)
+        self.assertFalse(lock.exists())
+
+    def test_watch_needs_a_known_action_a_valid_config_and_the_token(self):
+        self.assertEqual(self.watch("restart")[0], 400)
+        self.assertEqual(self.post("/api/watch", {"action": "start"}, token=False)[0], 403)
+        self.config.write_text("[watch]\n", encoding="utf-8")
+        self.assertEqual(self.watch("start")[0], 400)
+
+    def test_quit_stops_the_child_and_the_server(self):
+        self.assertEqual(self.watch("start")[0], 200)
+        child = self.server.child
+        self.assertEqual(self.post("/api/quit", {}), (200, {"ok": True}))
+        self.assertTrue(self.wait_for(lambda: child.poll() is not None))
+        self.assertTrue(self.wait_for(self._refuses_connections))
+
+    def _refuses_connections(self):
+        try:
+            self.request("GET", "/api/ping")
+        except OSError:
+            return True
+        return False
+
+    def test_ping_names_the_app_and_still_checks_the_host(self):
+        self.assertEqual(self.get_json("/api/ping"), {"app": "dead-air"})
+        self.assertEqual(self.request("GET", "/api/ping", headers={"Host": "evil.example"})[0], 421)
+
+    def test_quit_without_the_token_is_403_and_stops_nothing(self):
+        self.assertEqual(self.watch("start")[0], 200)
+        self.assertEqual(self.post("/api/quit", {}, token=False)[0], 403)
+        self.assertIsNone(self.server.child.poll())
+
+    def _idle_server(self, idle_s):
+        server = dead_air_gui.make_server(self.config, 0, idle_s)
+        serving = threading.Thread(target=server.serve_forever, daemon=True)
+        serving.start()
+        threading.Thread(target=dead_air_gui._idle_loop, args=(server,), daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(serving.join, 5)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.done.set)
+        self.addCleanup(dead_air_gui.stop_watch, server)
+        return server, serving
+
+    def test_idle_timeout_stops_a_server_with_no_watcher(self):
+        _server, serving = self._idle_server(1)
+        serving.join(10)
+        self.assertFalse(serving.is_alive())
+
+    def test_idle_timeout_does_not_fire_while_the_watcher_runs(self):
+        server, serving = self._idle_server(1)
+        self.assertEqual(dead_air_gui.start_watch(server)[0], 200)
+        time.sleep(3)
+        self.assertTrue(serving.is_alive())
+        dead_air_gui.stop_watch(server)
+        serving.join(10)  # with the child gone the idle clock runs out
+        self.assertFalse(serving.is_alive())
+
+
+class InstanceTests(GuiTestCase):
+    def test_a_second_instance_opens_the_page_of_the_first_and_exits_0(self):
+        out = io.StringIO()
+        with patch.object(dead_air_gui.webbrowser, "open") as opener, contextlib.redirect_stdout(out):
+            self.assertEqual(dead_air_gui.serve(self.config, self.port, True), 0)
+        opener.assert_called_once_with(f"http://127.0.0.1:{self.port}/")
+        self.assertIn(f"DEAD AIR GUI: http://127.0.0.1:{self.port}/", out.getvalue())
+
+    def test_a_foreign_listener_on_the_port_exits_2_with_a_message(self):
+        import socket
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            out = io.StringIO()
+            with patch.object(dead_air_gui.webbrowser, "open") as opener, contextlib.redirect_stdout(out):
+                self.assertEqual(dead_air_gui.serve(self.config, listener.getsockname()[1], True), 2)
+        opener.assert_not_called()
+        self.assertIn("in use by another program", out.getvalue())
+
+    def test_the_default_port_and_the_watch_flag_reach_serve(self):
+        with patch.object(dead_air_gui, "serve", return_value=0) as served:
+            self.assertEqual(dead_air.main(["gui", "--config", "x.toml", "--no-browser", "--watch"]), 0)
+            self.assertEqual(dead_air.main(["gui", "--config", "x.toml"]), 0)
+        self.assertEqual(served.call_args_list[0].args, ("x.toml", 47824, False, True))
+        self.assertEqual(served.call_args_list[1].args, ("x.toml", 47824, True, False))
+
+    def test_serve_with_watch_starts_the_watcher_and_stops_it_on_exit(self):
+        with patch.object(dead_air_gui.ThreadingHTTPServer, "serve_forever", side_effect=KeyboardInterrupt), \
+                patch.object(dead_air_gui, "start_watch", return_value=(200, {"ok": True})) as started, \
+                patch.object(dead_air_gui, "stop_watch") as stopped, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(dead_air_gui.serve(self.config, 0, False, True), 0)
+        started.assert_called_once()
+        stopped.assert_called_once()
 
 
 class ServeTests(unittest.TestCase):

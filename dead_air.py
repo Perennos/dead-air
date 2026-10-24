@@ -2661,12 +2661,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     watch_parser.add_argument("--json", action="store_true")
     gui_parser = commands.add_parser("gui", help="serve a local page on 127.0.0.1 (see README, GUI)")
     gui_parser.add_argument("--config", default=DEFAULT_CONFIG)
-    gui_parser.add_argument("--port", type=int, default=0)
+    gui_parser.add_argument("--port", type=int, default=47824)
     gui_parser.add_argument("--no-browser", action="store_true")
+    gui_parser.add_argument("--watch", action="store_true", help="also start watching")
     args = parser.parse_args(argv)
     if args.command == "gui":
         from dead_air_gui import serve  # lazy: the other commands never load the GUI
-        return serve(args.config, args.port, not args.no_browser)
+        return serve(args.config, args.port, not args.no_browser, args.watch)
     if args.command == "watch":
         try:
             _validate_watch_mode(args.max_cycles, args.continuous)
