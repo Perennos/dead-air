@@ -14,7 +14,16 @@
   --marigold: #F7B32B;
   --marigold-text: var(--marigold);
   --focus: var(--marigold);
+  --rosa: #F2A1C0;
+  --lilac: #C7B8EA;
   --mint: #A8E6CF;
+  --bone: #F4EFE6;
+  --pennant-1: var(--rosa);
+  --pennant-2: var(--lilac);
+  --pennant-3: var(--mint);
+  --pennant-4: var(--marigold);
+  --pennant-5: var(--bone);
+  --ease: cubic-bezier(0.3, 0, 0.1, 1);
   --mint-text: var(--mint);
   --font-display: "Bahnschrift", "Avenir Next", "Segoe UI Variable Display", "Helvetica Neue", sans-serif;
   --font-mono: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
@@ -49,6 +58,7 @@
     --marigold-text: #7F5D19;
     --focus: #976E1D;
     --mint-text: #476057;
+    --pennant-5: var(--rosa); /* the kit has four pastels on bone paper */
   }
 }
 
@@ -67,13 +77,30 @@ time { font-family: var(--font-mono); font-size: var(--text-sm); }
   overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
 }
 
-/* Top band */
-.band {
+/* Top band: a string of papel picado pennants, then the controls */
+.band { border-bottom: 1px solid var(--line); }
+.string { display: block; inline-size: 100%; block-size: 3.5rem; }
+.cord { fill: none; stroke: var(--dim); stroke-width: 1; }
+.pn { transform-box: fill-box; transform-origin: 50% 0; animation: sway 6s var(--ease) infinite alternate; }
+.p1 { fill: var(--pennant-1); }
+.p2 { fill: var(--pennant-2); }
+.p3 { fill: var(--pennant-3); }
+.p4 { fill: var(--pennant-4); }
+.p5 { fill: var(--pennant-5); }
+.cut { fill: var(--base); }
+.d1 { animation-delay: -1s; }
+.d2 { animation-delay: -3s; animation-duration: 7s; }
+.d3 { animation-delay: -5s; animation-duration: 5s; }
+@keyframes sway { from { transform: rotate(-2deg); } to { transform: rotate(2deg); } }
+/* An open incident: the pennants stop, go one flat colour, and the string sags */
+.is-alert .pn { animation: none; fill: var(--red); }
+.is-alert .swing { transform: translateY(3px); }
+@media (prefers-reduced-motion: reduce) { .pn { animation: none; } }
+.band-row {
   display: flex; flex-wrap: wrap; align-items: center;
   gap: var(--space-2xs) var(--space-xs);
   padding-block: var(--space-2xs);
   padding-inline: max(var(--gutter), calc((100% - 72rem) / 2 + var(--gutter))); /* line up with .page */
-  border-bottom: 1px solid var(--line);
 }
 .title {
   min-width: 0; font-size: var(--text-lg); font-weight: 700; letter-spacing: 0.12em;
@@ -85,14 +112,13 @@ time { font-family: var(--font-mono); font-size: var(--text-sm); }
 }
 .band-actions { display: flex; flex-wrap: wrap; gap: var(--space-2xs); margin-inline-start: auto; }
 @media (min-width: 40rem) {
-  .band { column-gap: var(--space-md); }
-  .band-stats { order: 0; flex: 1 1 0; }
+  .band-row { column-gap: var(--space-md); }  .band-stats { order: 0; flex: 1 1 0; }
 }
 
 /* Button: default, hover, focus-visible, active, disabled, busy */
 .btn {
-  min-block-size: var(--control); padding: 0 var(--space-md);
-  font: 600 var(--text-md) / 1 var(--font-display);
+  min-block-size: var(--control); padding: 0 var(--space-xs);
+  font: 600 0.9375rem / 1 var(--font-display);
   color: var(--base); background: var(--text);
   border: 1px solid var(--text); border-radius: var(--radius);
   outline: 2px solid transparent; outline-offset: 2px;
@@ -105,6 +131,7 @@ time { font-family: var(--font-mono); font-size: var(--text-sm); }
 .btn:active { color: var(--text); background: var(--surface); border-color: var(--text); }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn[aria-busy="true"]:disabled { cursor: progress; }
+@media (min-width: 40rem) { .btn { padding: 0 var(--space-md); font-size: var(--text-md); } }
 
 /* Page */
 .page {
@@ -126,18 +153,27 @@ time { font-family: var(--font-mono); font-size: var(--text-sm); }
 .results .bad { color: var(--red-text); font-weight: 600; }
 
 /* Stream cards */
-.grid { display: grid; gap: var(--space-sm); grid-template-columns: minmax(0, 1fr); }
-@media (min-width: 40rem) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (min-width: 64rem) { .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.grid { display: grid; gap: var(--space-sm); grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); }
 .card {
   display: grid; gap: var(--space-sm); align-content: start; min-width: 0;
   padding: var(--space-sm);
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
 }
 .card.is-incident { border-color: var(--red); }
-.card-head { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: var(--space-sm); align-items: center; }
-.mark { display: block; inline-size: 4rem; block-size: 4rem; }
-.mark.is-dim { opacity: 0.5; }
+.card-head { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: var(--space-sm); align-items: center; }
+.mark { display: block; inline-size: 4.5rem; block-size: 4.5rem; }
+.mark.is-dim { opacity: 0.6; }
+
+/* Overall status: the calavera, big, next to one line */
+.hero { display: flex; align-items: center; gap: var(--space-md); }
+.hero-mark { flex: none; inline-size: 8rem; block-size: 8rem; }
+.hero-mark.is-dim { opacity: 0.6; }
+.hero-mark.is-dead { filter: drop-shadow(0 0 1.5rem var(--red)); }
+.hero-line { min-width: 0; font-size: var(--text-xl); font-weight: 700; line-height: 1.1; overflow-wrap: anywhere; }
+@media (min-width: 40rem) {
+  .hero-mark { inline-size: 12rem; block-size: 12rem; }
+  .hero-line { font-size: 2.25rem; }
+}
 .card h3 { min-width: 0; font-size: var(--text-lg); font-weight: 600; line-height: 1.2; overflow-wrap: anywhere; }
 .host { font: 400 var(--text-sm) / 1.4 var(--font-mono); color: var(--dim); overflow-wrap: anywhere; }
 .status { font-size: var(--text-xl); font-weight: 700; letter-spacing: 0.06em; line-height: 1.1; overflow-wrap: anywhere; }

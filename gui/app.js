@@ -47,7 +47,7 @@
     const article = el('article', 'card is-' + s.severity);
     article.setAttribute('aria-labelledby', 'name-' + s.id);
     const mark = el('img', dim ? 'mark ' + dim : 'mark');
-    mark.src = src; mark.alt = alt; mark.width = 64; mark.height = 64;
+    mark.src = src; mark.alt = alt; mark.width = 72; mark.height = 72;
     const name = el('h3', '', s.name);
     name.id = 'name-' + s.id;
     const who = el('div');
@@ -91,6 +91,23 @@
     return article;
   }
 
+  // The overall state: the pennants on <body>, the big mark and one line beside it.
+  function hero(s) {
+    const bad = s.streams.filter((x) => x.severity === 'incident').length;
+    let line = 'All quiet.';
+    let state = 'ok';
+    if (bad) { line = 'Dead air on ' + bad + (bad === 1 ? ' stream.' : ' streams.'); state = 'incident'; }
+    else if (!(running || s.watching) || !s.streams.length) { line = 'Not watching.'; state = 'uncertain'; }
+    else if (s.streams.some((x) => x.severity === 'uncertain')) { line = 'Not sure yet.'; state = 'uncertain'; }
+    document.body.classList.toggle('is-alert', bad > 0);
+    const [src, alt, dim] = MARKS[state];
+    const mark = $('hero-mark');
+    if (!mark.src.endsWith(src)) mark.src = src;
+    mark.alt = alt;
+    mark.className = 'hero-mark' + (dim ? ' ' + dim : '') + (state === 'incident' ? ' is-dead' : '');
+    if ($('hero-line').textContent !== line) $('hero-line').textContent = line;
+  }
+
   function render(s) {
     const count = s.stream_count + (s.stream_count === 1 ? ' stream' : ' streams');
     const cycle = s.last_cycle ? 'last cycle ' + when.format(new Date(s.last_cycle)) : 'no cycle yet';
@@ -111,6 +128,7 @@
     $('alerts-line').textContent = s.destinations.length
       ? 'Alerts go to ' + s.destinations.map((d) => d.id + ' (' + d.type + ')').join(', ') + '.'
       : 'No alert destinations are configured. Add a [[destinations]] block to your config, as dead-air.example.toml shows.';
+    hero(s);
     $('streams').replaceChildren(...s.streams.map(card));
     $('empty').hidden = s.streams.length > 0 || Boolean(s.config_error);
   }
