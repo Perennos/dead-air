@@ -7,6 +7,7 @@
 - Organized configuration, models, persistence, status, and engine modules.
 - Read-only status during watch, original observation age, stale/config-change
   handling, open incidents, and pending/sent/failed delivery counts.
+- Malformed persisted observation times stay UNKNOWN without non-finite ages.
 - Human-readable monitoring output; `--json` retains the observations array and
   adds incident/delivery diagnostics.
 - Config-relative state and explicit tool paths; direct-source doctor no longer

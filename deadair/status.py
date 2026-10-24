@@ -28,8 +28,13 @@ def _stream_status(stream: dead_air.StreamConfig, state: dict[str, Any], when: f
     if not isinstance(latest, dict):
         latest = {}
     raw_wall = state.get("last_observed_wall")
-    wall = float(raw_wall) if isinstance(raw_wall, (int, float)) and not isinstance(raw_wall, bool) else None
+    try:
+        wall = float(raw_wall) if isinstance(raw_wall, (int, float)) and not isinstance(raw_wall, bool) else None
+    except OverflowError:
+        wall = None
     age = when - wall if wall is not None and math.isfinite(wall) else None
+    if age is not None and not math.isfinite(age):
+        age = None
     reason = None
     if not latest or age is None:
         reason = "NO_OBSERVATION"

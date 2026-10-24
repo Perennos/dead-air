@@ -238,6 +238,22 @@ class PersistenceOperationsTests(unittest.TestCase):
                 changed = dataclasses.replace(cfg, streams=(dataclasses.replace(cfg.streams[0], url="https://example.invalid/changed"),))
                 self.assertEqual(read_status(changed, now_wall=101)["status"], "UNKNOWN")
 
+    def test_malformed_or_unrepresentable_observation_times_stay_unknown(self):
+        from deadair.status import _stream_status
+        stream = test_config().streams[0]
+        latest = {"status": "HEALTHY", "observed_at": "1970-01-01T00:01:40Z"}
+        cases = (("oversized integer", 10 ** 1000, 100), ("positive infinity", float("inf"), 100),
+                 ("negative infinity", float("-inf"), 100), ("not a number", float("nan"), 100),
+                 ("overflowing age", -1e308, 1e308))
+        for label, raw_wall, when in cases:
+            with self.subTest(timestamp=label):
+                state = {"latest": latest, "last_observed_wall": raw_wall,
+                         "config_fingerprint": dead_air.stream_fingerprint(stream)}
+                result = _stream_status(stream, state, when)
+                self.assertEqual(result["status"], "UNKNOWN")
+                self.assertIsNone(result["age_s"])
+                json.dumps(result, allow_nan=False)
+
     def test_legacy_lock_is_never_removed_or_bypassed(self):
         with tempfile.TemporaryDirectory() as directory:
             legacy = Path(directory) / ".dead-air.lock"
@@ -298,7 +314,10 @@ class LifecycleOperationsTests(unittest.TestCase):
         pid = int(result.stdout.strip())
         try:
             process = Path(f"/proc/{pid}/stat")
-            state = process.read_text().rsplit(")", 1)[1].split()[0] if process.exists() else None
+            try:
+                state = process.read_text().rsplit(")", 1)[1].split()[0]
+            except (FileNotFoundError, ProcessLookupError):
+                state = None
             self.assertIn(state, (None, "Z"), "owned descendant remained running")
             self.assertTrue(result.cleanup_complete)
         finally:
