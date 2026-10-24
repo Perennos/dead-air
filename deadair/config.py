@@ -19,7 +19,10 @@ _LABEL_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 def _finite(value: Any, name: str, low: float, high: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigError(f"{name} must be numeric")
-    result = float(value)
+    try:
+        result = float(value)
+    except OverflowError:
+        raise ConfigError(f"{name} is outside its permitted range") from None
     if not math.isfinite(result) or not low <= result <= high:
         raise ConfigError(f"{name} is outside its permitted range")
     return result
@@ -249,7 +252,7 @@ def load_config(path: str | os.PathLike[str]) -> AppConfig:
         config_path = Path(path).expanduser().absolute()
         with config_path.open("rb") as handle:
             data = tomllib.load(handle)
-    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+    except (OSError, UnicodeError, ValueError) as exc:
         raise ConfigError(f"cannot read config ({type(exc).__name__})") from None
     config = validate_config(data)
     parent = config_path.parent

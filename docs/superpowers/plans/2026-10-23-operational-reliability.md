@@ -24,31 +24,44 @@ stream-control action, or artwork redesign. Keep UNKNOWN evidence conservative.
 
 ## Task 1: Configuration and doctor
 
-- [ ] Add failing regressions for optional resolver, incomplete detector execution,
+- [x] Add failing regressions for optional resolver, incomplete detector execution,
   malformed destination type/resolver metadata and config-relative paths.
-- [ ] Implement bounded validation and only require tools used by configured streams.
-- [ ] Run operations and source suites, then commit.
+- [x] Implement bounded validation and only require tools used by configured streams.
+- [x] Run operations and source suites, then commit.
 
 ## Task 2: Scheduling and incident independence
 
-- [ ] Add failing tests for per-stream deadlines, start-to-start cadence, overrun,
+- [x] Add failing tests for per-stream deadlines, start-to-start cadence, overrun,
   and missing-track recovery into frozen/silent media.
-- [ ] Implement serial fair budgeting and monotonic cadence; fix recovery signals.
-- [ ] Run operations, incident, and source suites, then commit.
+- [x] Implement serial fair budgeting and monotonic cadence; fix recovery signals.
+- [x] Run operations, incident, and source suites, then commit.
 
 ## Task 3: Crash-safe persistence and read-only status
 
-- [ ] Add failing tests for lock contention, separate databases, abrupt child death,
+- [x] Add failing tests for lock contention, separate databases, abrupt child death,
   legacy-lock preservation, snapshots, stale/absent/rollback evidence, and delivery counts.
-- [ ] Use platform OS file locks. Preserve snapshots across restart without keeping
+- [x] Use platform OS file locks. Preserve snapshots across restart without keeping
   untrustworthy pending counters. Add a bounded read-only SQLite status reader.
-- [ ] Add human output and status CLI with explicit JSON compatibility tests.
-- [ ] Run operations and all existing suites, then commit.
+- [x] Add human output and status CLI with explicit JSON compatibility tests.
+- [x] Run operations and all existing suites, then commit.
 
 ## Task 4: Installation, documentation, and release checks
 
-- [ ] Add pyproject.toml with dead-air entry point and optional YouTube extra.
-- [ ] Update examples, README, operations guide, CI package/CLI checks and changelog.
-- [ ] Verify isolated installation, validate/doctor/status CLI and full discovery.
+- [x] Add pyproject.toml with dead-air entry point and optional YouTube extra.
+- [x] Update examples, README, operations guide, CI package/CLI checks and changelog.
+- [x] Verify isolated installation, validate/doctor/status CLI and full discovery.
 - [ ] Obtain independent review, address important findings with regressions,
   commit final results, publish branch and PR, and inspect CI.
+
+## Execution decisions
+
+- The user subsequently asked for file organization, deep research, Argon planning,
+  `/ponytail` where available, and @marzouca credit. Implementation was organized
+  into a package with a compatibility facade; no new mandatory dependency was added.
+- No callable Argon or ponytail route was found; their execution remains Untested.
+  A concrete Argon handoff is included in the research document.
+- Independent review found five issues; all have regression evidence and fixes in
+  this branch. See docs/VERIFICATION.md. DNS pinning and explicit HTTPS capture
+  verification were added based on review and measured local FFmpeg behavior.
+- Source fingerprint changes invalidate stored display health. Legacy state schema
+  remains 1, and old counters reset only on writable startup as before.

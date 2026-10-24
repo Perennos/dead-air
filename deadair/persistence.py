@@ -4,13 +4,16 @@ import json
 import math
 import os
 import sqlite3
+import tempfile
 import uuid
 from pathlib import Path
+from datetime import datetime
 from typing import Any, Mapping, Sequence
 from .models import AppConfig, DestinationConfig, Observation, PersistenceError, StreamConfig
 
 class IncidentStore:
     SCHEMA = 1
+    LEGACY_GUARD = b"DEAD_AIR_OS_LOCK_V2\n"
 
     def __init__(self, path: str | os.PathLike[str], retention_days: int = 90):
         self.path = Path(path).absolute()
@@ -23,9 +26,7 @@ class IncidentStore:
             self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             if self.directory.is_symlink() or self.path.is_symlink():
                 raise PersistenceError("STATE_PATH_UNSAFE")
-            legacy_lock = self.directory / ".dead-air.lock"
-            if legacy_lock.exists() or legacy_lock.is_symlink():
-                raise PersistenceError("STATE_LOCKED")
+            self._guard_legacy_writers()
             self._acquire_lock()
             existed = self.path.exists()
             if existed and self.path.stat().st_size == 0:
@@ -122,6 +123,33 @@ class IncidentStore:
             os.close(descriptor)
             raise PersistenceError("STATE_LOCKED") from None
         self._lock_fd = descriptor
+
+    def _guard_legacy_writers(self) -> None:
+        """Old releases use O_EXCL on this directory sentinel; keep them out too."""
+        path = self.directory / ".dead-air.lock"
+        def verify() -> None:
+            if path.is_symlink():
+                raise PersistenceError("STATE_PATH_UNSAFE")
+            with path.open("rb") as handle:
+                if handle.read(len(self.LEGACY_GUARD) + 1) != self.LEGACY_GUARD:
+                    raise PersistenceError("STATE_LOCKED")
+        if path.exists() or path.is_symlink():
+            verify()
+            return
+        descriptor, temporary = tempfile.mkstemp(prefix=".dead-air-guard-", dir=self.directory)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(self.LEGACY_GUARD)
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                # Publish complete contents without replacing any legacy owner's
+                # sentinel. A crash before this link cannot block future startup.
+                os.link(temporary, path)
+            except FileExistsError:
+                verify()
+        finally:
+            os.unlink(temporary)
 
     def _release_lock(self) -> None:
         if self._lock_fd is not None:
@@ -272,7 +300,11 @@ class IncidentStore:
                     # Unknown evidence neither advances nor resolves another condition.
                 state["last_wall"], state["last_mono"] = now_wall, now_mono
                 state["latest"] = core.observation_json(observation)
-                state["last_observed_wall"] = now_wall
+                try:
+                    observed = datetime.fromisoformat(observation.observed_at.replace("Z", "+00:00"))
+                    state["last_observed_wall"] = observed.timestamp() if observed.tzinfo is not None else None
+                except (ValueError, OverflowError, OSError):
+                    state["last_observed_wall"] = None
                 state["config_fingerprint"] = core.stream_fingerprint(stream)
                 raw_state = json.dumps(state, sort_keys=True, separators=(",", ":"))
                 self._db.execute(

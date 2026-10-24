@@ -351,8 +351,9 @@ class ProcessAndPolicyTests(unittest.TestCase):
         input_indexes = [i for i, value in enumerate(argv) if value == "-i"]
         self.assertEqual(len(input_indexes), 2)
         for index in input_indexes:
-            self.assertEqual(argv[index - 4:index], [
+            self.assertEqual(argv[index - 6:index], [
                 "-protocol_whitelist", dead_air.INPUT_PROTOCOLS,
+                "-tls_verify", "1",
                 "-rw_timeout", "10000000",
             ])
 

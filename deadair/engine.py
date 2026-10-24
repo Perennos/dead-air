@@ -6,6 +6,7 @@ import argparse
 import email.message
 import email.utils
 import hashlib
+import http.client
 import ipaddress
 import json
 import math
@@ -234,17 +235,29 @@ def _hostport_key(host: str, port: int) -> str:
     return f"{normalized}:{port}"
 
 
-def _resolve_addresses(host: str, port: int) -> tuple[str, ...]:
+def _resolve_addresses(host: str, port: int, *, timeout_s: float = 5.0) -> tuple[str, ...]:
     try:
         literal = ipaddress.ip_address(host)
         return (str(literal),)
     except ValueError:
         pass
-    try:
-        answers = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except OSError:
+    if timeout_s <= 0:
+        raise PolicyError("DNS_TIMEOUT")
+    code = ("import socket,json,sys; "
+            "a=socket.getaddrinfo(sys.argv[1],int(sys.argv[2]),type=socket.SOCK_STREAM); "
+            "print(json.dumps(list(dict.fromkeys(x[4][0].split('%',1)[0] for x in a))))")
+    answer = run_bounded([sys.executable, "-c", code, host, str(port)], timeout_s, max_output_bytes=8192)
+    if answer.timed_out:
+        raise PolicyError("DNS_TIMEOUT")
+    if answer.returncode != 0 or answer.output_limited or not answer.cleanup_complete:
         raise PolicyError("DNS_UNAVAILABLE") from None
-    result = tuple(dict.fromkeys(answer[4][0].split("%", 1)[0] for answer in answers))
+    try:
+        values = json.loads(answer.stdout)
+        if not isinstance(values, list) or len(values) > 64:
+            raise ValueError
+        result = tuple(str(ipaddress.ip_address(value)) for value in values)
+    except (ValueError, TypeError):
+        raise PolicyError("DNS_UNAVAILABLE") from None
     if not result:
         raise PolicyError("DNS_EMPTY")
     return result
@@ -258,13 +271,20 @@ def validate_network_target(
     address_resolver: Callable[[str, int], Sequence[str]] = _resolve_addresses,
     *,
     thumbnail: bool = False,
+    deadline: float | None = None,
 ) -> tuple[str, ...]:
     try:
         host, port = _static_url(url, source, thumbnail=thumbnail)
     except ConfigError as exc:
         raise PolicyError("URL_POLICY_REJECTED") from exc
     try:
-        addresses = tuple(address_resolver(host, port))
+        if address_resolver is _resolve_addresses:
+            timeout = _remaining(5.0, deadline)
+            if timeout is None:
+                raise PolicyError("DNS_TIMEOUT")
+            addresses = _resolve_addresses(host, port, timeout_s=timeout)
+        else:
+            addresses = tuple(address_resolver(host, port))
         parsed = [ipaddress.ip_address(address) for address in addresses]
     except (ValueError, OSError, PolicyError):
         raise PolicyError("DNS_UNAVAILABLE") from None
@@ -316,6 +336,7 @@ def select_resolved_media(
     stream: StreamConfig,
     network: NetworkConfig,
     address_resolver: Callable[[str, int], Sequence[str]] = _resolve_addresses,
+    *, deadline: float | None = None,
 ) -> tuple[ResolvedMedia | None, str | None, str | None]:
     """Return media, explicit off-air reason, or a non-sensitive UNKNOWN reason."""
     if not isinstance(payload, dict):
@@ -354,7 +375,8 @@ def select_resolved_media(
         return None, None, "RESOLVER_MEDIA_MISSING"
     for media in chosen:
         try:
-            validate_network_target(media.url, "direct", network, stream.allow_private, address_resolver)
+            validate_network_target(media.url, "direct", network, stream.allow_private, address_resolver,
+                                    deadline=deadline)
         except PolicyError:
             return None, None, "RESOLVER_MEDIA_URL_REJECTED"
     return ResolvedMedia(tuple(chosen)), None, None
@@ -363,6 +385,49 @@ def select_resolved_media(
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
         return None
+
+
+def _connect_pinned(connection: Any, addresses: Sequence[str]) -> None:
+    """Connect to already checked numeric addresses without a second DNS lookup."""
+    deadline = time.monotonic() + float(connection.timeout)
+    for address in addresses:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        sock = socket.socket(socket.AF_INET6 if ":" in address else socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.settimeout(remaining)
+            sock.connect((address, connection.port))
+            connection.sock = sock
+            return
+        except OSError:
+            sock.close()
+    raise OSError("HTTP_CONNECT_FAILED")
+
+
+def _pinned_handlers(addresses: Sequence[str]) -> tuple[Any, Any]:
+    class HTTPConnection(http.client.HTTPConnection):
+        def connect(self) -> None:
+            _connect_pinned(self, addresses)
+
+    class HTTPSConnection(http.client.HTTPSConnection):
+        def connect(self) -> None:
+            _connect_pinned(self, addresses)
+            try:
+                self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
+            except BaseException:
+                self.sock.close()
+                raise
+
+    class HTTPHandler(urllib.request.HTTPHandler):
+        def http_open(self, request: Any) -> Any:
+            return self.do_open(HTTPConnection, request)
+
+    class HTTPSHandler(urllib.request.HTTPSHandler):
+        def https_open(self, request: Any) -> Any:
+            return self.do_open(HTTPSConnection, request, context=self._context)
+
+    return HTTPHandler(), HTTPSHandler()
 
 
 def _read_http_body(response: Any, max_bytes: int, deadline: float) -> tuple[bytes, bool, bool]:
@@ -407,15 +472,17 @@ def bounded_http_get(
     operation_deadline = time.monotonic() + timeout_s
     if deadline is not None:
         operation_deadline = min(operation_deadline, deadline)
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
     for redirect_count in range(network.max_redirects + 1):
         try:
-            validate_network_target(current, source, network, allow_private, address_resolver)
+            addresses = validate_network_target(current, source, network, allow_private, address_resolver,
+                                                deadline=operation_deadline)
         except PolicyError as exc:
             return HttpResult(None, current, "", b"", error_code=str(exc))
         hop_timeout = operation_deadline - time.monotonic()
         if hop_timeout <= 0:
             return HttpResult(None, current, "", b"", error_code="HTTP_TIMEOUT")
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect(),
+                                            *_pinned_handlers(addresses or ()))
         headers = {"User-Agent": f"Dead-Air/{VERSION}", "Accept": "*/*"}
         if range_request:
             headers["Range"] = f"bytes=0-{max_bytes - 1}"
@@ -1011,10 +1078,11 @@ def build_capture_argv(media: ResolvedMedia, stream: StreamConfig, config: AppCo
         "-filter_threads", "1",
     ]
     for item in media.inputs:
-        args.extend([
-            "-protocol_whitelist", INPUT_PROTOCOLS,
-            "-rw_timeout", "10000000", "-i", item.url,
-        ])
+        args.extend(["-protocol_whitelist", INPUT_PROTOCOLS])
+        # Older FFmpeg builds reject unused TLS options on plain HTTP inputs.
+        if urllib.parse.urlsplit(item.url).scheme.lower() == "https":
+            args.extend(["-tls_verify", "1"])
+        args.extend(["-rw_timeout", "10000000", "-i", item.url])
     maps: list[str] = []
     if stream.expect_video:
         video_index = next((i for i, item in enumerate(media.inputs) if item.kind in {"video", "muxed"}), None)
@@ -1073,12 +1141,12 @@ def capture_and_inspect(
         return _unknown_observation(stream, "CAPTURE_SETUP_FAILED")
 
 
-def _parse_resolver(stdout: str, stream: StreamConfig, config: AppConfig, address_resolver: Callable[[str, int], Sequence[str]]) -> tuple[ResolvedMedia | None, str | None, str | None]:
+def _parse_resolver(stdout: str, stream: StreamConfig, config: AppConfig, address_resolver: Callable[[str, int], Sequence[str]], *, deadline: float | None = None) -> tuple[ResolvedMedia | None, str | None, str | None]:
     try:
         payload = json.loads(stdout)
     except (TypeError, json.JSONDecodeError):
         return None, None, "RESOLVER_JSON_INVALID"
-    return select_resolved_media(payload, stream, config.network, address_resolver)
+    return select_resolved_media(payload, stream, config.network, address_resolver, deadline=deadline)
 
 
 def _youtube_thumbnail_url(url: str) -> str | None:
@@ -1118,7 +1186,7 @@ def _fallback_observation(
         return original
     try:
         validate_network_target(thumbnail_url, "direct", config.network, stream.allow_private,
-                               address_resolver, thumbnail=True)
+                               address_resolver, thumbnail=True, deadline=deadline)
     except PolicyError:
         return original
     timeout = _remaining(config.watch.analysis_timeout_s, deadline)
@@ -1161,7 +1229,8 @@ def observe_stream(
 ) -> Observation:
     """Resolve one configured source and perform a bounded observation."""
     try:
-        validate_network_target(stream.url, stream.source, config.network, stream.allow_private, address_resolver)
+        validate_network_target(stream.url, stream.source, config.network, stream.allow_private, address_resolver,
+                                deadline=deadline)
     except PolicyError as exc:
         return _unknown_observation(stream, str(exc))
 
@@ -1192,7 +1261,8 @@ def observe_stream(
         if result.status is None or not 200 <= result.status < 300:
             return _unknown_observation(stream, result.error_code or "DIRECT_PROBE_UNKNOWN")
         try:
-            validate_network_target(result.final_url, "direct", config.network, stream.allow_private, address_resolver)
+            validate_network_target(result.final_url, "direct", config.network, stream.allow_private, address_resolver,
+                                    deadline=deadline)
         except PolicyError:
             return _unknown_observation(stream, "DIRECT_REDIRECT_REJECTED")
         media = ResolvedMedia((MediaInput("muxed", result.final_url),))
@@ -1209,7 +1279,7 @@ def observe_stream(
             return fallback_unknown(_unknown_observation(stream, "RESOLVER_BOUNDED_FAILURE"))
         if result.launch_error or result.returncode != 0:
             return fallback_unknown(_unknown_observation(stream, "RESOLVER_FAILED"))
-        media, off_air, error = _parse_resolver(result.stdout, stream, config, address_resolver)
+        media, off_air, error = _parse_resolver(result.stdout, stream, config, address_resolver, deadline=deadline)
         if off_air:
             audio = DimensionEvidence("UNKNOWN", ("NO_MEDIA_SAMPLE_AFTER_OFF_AIR",)) if stream.expect_audio else DimensionEvidence("NOT_APPLICABLE", ("AUDIO_NOT_EXPECTED",))
             video = DimensionEvidence("UNKNOWN", ("NO_MEDIA_SAMPLE_AFTER_OFF_AIR",)) if stream.expect_video else DimensionEvidence("NOT_APPLICABLE", ("VIDEO_NOT_EXPECTED",))
@@ -1441,8 +1511,10 @@ def bounded_http_post(url: str, body: bytes, headers: Mapping[str, str], timeout
         _static_url(url, "direct")
         if urllib.parse.urlsplit(url).scheme != "https":
             return None, "TLS_REQUIRED", None
-        validate_network_target(url, "direct", network, allow_private, address_resolver)
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+        addresses = validate_network_target(url, "direct", network, allow_private, address_resolver,
+                                            deadline=time.monotonic() + timeout_s)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect(),
+                                            *_pinned_handlers(addresses or ()))
         request = urllib.request.Request(url, data=body, headers=dict(headers), method="POST")
         try:
             response = opener.open(request, timeout=timeout_s)

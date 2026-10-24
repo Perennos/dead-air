@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ version = "0.2.0"
 description = "A local, bounded stream watchdog for off-air, frozen picture, and silence"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{name = "Perennos"}, {name = "Alexander Marzouca"}]
 dependencies = []
 classifiers = [
@@ -31,7 +32,6 @@ Issues = "https://github.com/Perennos/dead-air/issues"
 [tool.setuptools]
 packages = ["deadair"]
 py-modules = ["dead_air"]
-license-files = ["LICENSE", "NOTICE"]
 
 [tool.setuptools.package-data]
 deadair = ["example.toml"]

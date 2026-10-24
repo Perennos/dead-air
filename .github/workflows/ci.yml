@@ -24,15 +24,21 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install pinned requirements from official PyPI
         run: python -m pip install --disable-pip-version-check --index-url https://pypi.org/simple -r requirements.txt
+      - name: Install package and exercise console entry point outside checkout
+        run: |
+          python -m pip install --disable-pip-version-check --index-url https://pypi.org/simple .
+          python scripts/smoke_install.py
       - name: Validate example from a fresh clean copy
         run: >-
-          python -c "import pathlib,shutil,subprocess,sys,tempfile; src=pathlib.Path.cwd(); temporary=tempfile.TemporaryDirectory(); clean=pathlib.Path(temporary.name)/'clean'; clean.mkdir(); [shutil.copy2(src/name,clean/name) for name in ('dead_air.py','dead-air.example.toml','requirements.txt')]; subprocess.run([sys.executable,str(clean/'dead_air.py'),'validate','--config',str(clean/'dead-air.example.toml')],cwd=clean,check=True)"
+          python -c "import pathlib,shutil,subprocess,sys,tempfile; src=pathlib.Path.cwd(); temporary=tempfile.TemporaryDirectory(); clean=pathlib.Path(temporary.name)/'clean'; clean.mkdir(); shutil.copytree(src/'deadair',clean/'deadair'); [shutil.copy2(src/name,clean/name) for name in ('dead_air.py','dead-air.example.toml','requirements.txt')]; subprocess.run([sys.executable,str(clean/'dead_air.py'),'validate','--config',str(clean/'dead-air.example.toml')],cwd=clean,check=True)"
       - name: Run source suite
         run: python -m unittest discover -s tests -p test_dead_air.py -v
       - name: Run incident suite
         run: python -m unittest discover -s tests -p test_incidents.py -v
       - name: Run alert suite
         run: python -m unittest discover -s tests -p test_alerts.py -v
+      - name: Run operations and crash-recovery suite
+        run: python -m unittest discover -s tests -p test_operations.py -v
       - name: Run Windows native-media suite when tools are available
         if: runner.os == 'Windows'
         shell: pwsh

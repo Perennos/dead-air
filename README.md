@@ -21,6 +21,8 @@ Remote captures include a 100 ms acquisition prefix followed by the configured f
 
 The command line offers:
 
+- **init** — create a private starter configuration without overwriting an existing file.
+- **status** — inspect persisted health, stale evidence, incidents and alert delivery without network access or state writes.
 - **validate** — parse the TOML configuration without network access or state writes.
 - **doctor** — inspect local binary versions and detector filters.
 - **check** — perform one bounded observation cycle.
@@ -28,101 +30,98 @@ The command line offers:
 
 These commands report observations; they do not control a stream, encoder, or OBS. No live source has been validated by this README.
 
-## Install
+## Get running
 
-Requirements: Python 3.11 or newer, FFmpeg and ffprobe available on PATH. The program does not install system binaries or run an administrator command for you.
+Python 3.11+, FFmpeg and ffprobe are required. No API key, account, cloud service,
+or mandatory Python dependency is needed. yt-dlp is optional for YouTube.
 
-Clone into a clean folder:
-
-~~~sh
+```sh
 git clone https://github.com/Perennos/dead-air.git
 cd dead-air
-~~~
+python -m venv .venv
+```
 
-Install FFmpeg yourself before running observations. On Windows, one WinGet option is:
+Use your environment's interpreter explicitly:
 
-~~~powershell
-winget install --id Gyan.FFmpeg.Shared -e
-~~~
+| Platform | Install the core | Installed command |
+| --- | --- | --- |
+| Windows | `.venv\Scripts\python.exe -m pip install .` | `.venv\Scripts\dead-air.exe` |
+| Linux/macOS | `.venv/bin/python -m pip install .` | `.venv/bin/dead-air` |
 
-On Debian or Ubuntu:
+For YouTube, install `".[youtube]"` instead of `.`. Provider changes and local
+JavaScript/EJS requirements still need qualification; the adapter does not sign
+in or import browser cookies. The pinned adapter is also listed in requirements.txt.
 
-~~~sh
-sudo apt install ffmpeg
-~~~
+Install system media tools yourself; the application does not run administrator
+commands. Examples are `winget install --id Gyan.FFmpeg.Shared -e` on Windows or
+`sudo apt install ffmpeg` on Debian/Ubuntu. Availability depends on your machine.
+Confirm both `ffmpeg` and `ffprobe` resolve in a new terminal.
 
-On Fedora, the package must be available from your enabled repositories:
+The examples below assume the environment's script directory is on PATH. Use the
+full command path from the table otherwise. From a checkout,
+`python dead_air.py` or `python -m deadair` can replace `dead-air`.
 
-~~~sh
-sudo dnf install ffmpeg
-~~~
+```sh
+dead-air init
+# Edit dead-air.toml: replace the synthetic source with one you own/are authorized to monitor.
+dead-air validate --config dead-air.toml
+dead-air doctor --config dead-air.toml
+dead-air check --config dead-air.toml
+```
 
-Package availability and install permissions depend on your machine and repositories. After installation, make sure both ffmpeg and ffprobe resolve from a new terminal.
+`init` refuses to overwrite a file. `validate` is offline and writes no state.
+`doctor` checks local tools and warns about timing or missing alert destinations;
+a passing result does not prove source health or alert receipt. The example has
+notifications disabled. Configure a destination explicitly if you want alerts.
 
-Create an isolated Python environment. Install the optional pinned yt-dlp adapter from `requirements.txt` only if you configure a supported YouTube source. Use the explicit virtual-environment interpreter; shell activation is not required. Confirm it meets the documented Python 3.11+ requirement.
+## Watch and inspect
 
-~~~powershell
-py -3 -m venv .venv
-.venv\Scripts\python.exe --version
-.venv\Scripts\python.exe -m pip install --disable-pip-version-check --index-url https://pypi.org/simple -r requirements.txt
-~~~
+```sh
+dead-air watch --config dead-air.toml --max-cycles 3
+dead-air watch --config dead-air.toml --continuous
+# In another terminal, with no source traffic or notification side effects:
+dead-air status --config dead-air.toml
+```
 
-On Linux or macOS, use `python3` with Python 3.11 or newer and its explicit virtual-environment interpreter:
+Add `--json` to check/watch/status for machine-readable output. Check and watch
+flush one object per cycle with `observations`, `open_incidents`, and `deliveries`.
+Default output is a concise readable summary. Status works while the writer is
+running, marks stale or changed-source evidence UNKNOWN, and exposes failed alert
+delivery. Its snapshot is not proof that the monitor process is still running.
 
-~~~sh
-python3 -m venv .venv
-.venv/bin/python --version
-.venv/bin/python -m pip install --disable-pip-version-check --index-url https://pypi.org/simple -r requirements.txt
-~~~
+Watch is serial and intervals measure cycle start to cycle start. Each remaining
+source receives a share of the remaining cycle budget. Continuous mode stays in
+the foreground, does not install a service, and stops on Ctrl+C or SIGTERM with
+owned-resource cleanup. No completed 24-hour soak is implied.
 
-For the command examples below, use `.venv\Scripts\python.exe` on Windows or `.venv/bin/python` on Linux/macOS when the optional adapter is needed.
+Exit codes are 0 healthy, 1 unhealthy/off-air, 2 unknown/degraded, 3 configuration
+or operational error, 130 Ctrl+C, and 143 SIGTERM. Status also accounts for open
+incidents and failed deliveries. See [operations](docs/OPERATIONS.md) for the full
+contract, alert retry timing, state ownership, upgrade/rollback, and limits.
 
-The example's `yt_dlp = "yt-dlp"` uses PATH lookup. For a YouTube source, replace it in your private copy of the configuration with the absolute installed console-script path in that virtual environment. Replace the project-path placeholder with the actual absolute path:
+Relative `state_path` and explicit relative tool paths resolve beside the TOML;
+bare executable names use PATH. When upgrading from 0.1.0, stop old instances,
+review these paths, retain `--json` for machine consumers, and read the lock notes.
 
-~~~toml
-# Linux/macOS
-yt_dlp = "/path/to/project/.venv/bin/yt-dlp"
+## Development and next steps
 
-# Windows
-yt_dlp = "C:\\path\\to\\project\\.venv\\Scripts\\yt-dlp.exe"
-~~~
+- [Architecture and file map](docs/ARCHITECTURE.md)
+- [Research and prioritized acceptance gates](docs/RESEARCH_AND_NEXT_STEPS.md)
+- [Changelog and upgrade notes](CHANGELOG.md)
+- [Contributors](CONTRIBUTORS.md), including [@marzouca](https://github.com/marzouca)
 
-A relative `tools.yt_dlp` path is resolved from DEAD AIR's process working directory, not from the configuration file's directory. Alternatively, prepend `.venv/bin` or `.venv\Scripts` to `PATH` only in the shell/process that starts DEAD AIR; this does not require activation and must not change user or system `PATH`.
-
-yt-dlp is used only for supported YouTube sources. Provider changes can break extraction, and some formats may require a compatible JavaScript runtime. DEAD AIR does not import browser cookies or sign in to stream accounts. A public URL is not a promise that a provider will expose usable media.
-
-## First check
-
-The example is safe for a configuration smoke check:
-
-~~~sh
-python dead_air.py validate --config dead-air.example.toml
-~~~
-
-This only parses the example TOML. It does not check FFmpeg, contact a source, capture media, send a notification, or prove production readiness. Use doctor for local binary and detector checks. Copy the example to a private configuration file, add only authorized targets, and keep private endpoints out of commits and issue reports. See the command help before running check or a finite watch cycle:
-
-~~~sh
-python dead_air.py --help
-python dead_air.py check --help
-python dead_air.py watch --help
-~~~
-
-Run either bounded or continuous watch with one explicit mode:
-
-~~~sh
-python dead_air.py watch --config dead-air.toml --max-cycles 3 --json
-python dead_air.py watch --config dead-air.toml --continuous --json
-~~~
-
-Continuous mode is the foreground path for long-running monitoring; it is not evidence of a completed 24-hour soak or production readiness. An observation can make network requests to every configured target. Start with one check and a source you own or have permission to monitor. Review the configuration before using watch.
+Run `python -m unittest discover -s tests -v` with FFmpeg, ffprobe and OpenSSL
+available. Tests use synthetic media and owned loopback endpoints. CI covers
+Python 3.11/3.14 on Linux and Windows, plus an installed-package smoke check.
+Do not infer a platform's latest CI result from this description.
 
 ## Privacy and safety
 
 - The core observer needs no stream account or provider API key. Optional notification destinations may need secrets; supply those through environment variables, never in the TOML file, source control, or a support log.
-- Public targets are the default. Private and loopback targets are denied unless the operator explicitly opts in and names the exact allowed targets. TLS certificate verification remains enabled.
-- This is not a hostile-URL sandbox. It trusts operator-owned configuration and local tool paths. Do not feed it untrusted URLs or configurations. DNS checks and socket limits reduce exposure but do not pin DNS results to the eventual connection.
+- Public targets are the default. Private and loopback targets are denied unless the operator explicitly opts in and names the exact allowed targets. Python HTTPS verifies certificates and hostnames; HTTPS media capture explicitly enables FFmpeg peer verification. FFmpeg hostname checking depends on its TLS backend; qualify the installed build and nested source path.
+- This is not a hostile-URL sandbox. It trusts operator-owned configuration and local tool paths. Do not feed it untrusted URLs or configurations. HTTP uses bounded DNS workers and connects to checked addresses. FFmpeg resolves media, nested playlists and redirects separately; those requests are not pinned by the Python transport.
 - Process cleanup has platform limits. On Windows, stopping a direct child does not provide a general guarantee that every descendant process is contained or stopped.
-- Local state and event evidence persist across cycles. Protect that directory as operational data; it can reveal source addresses and monitoring history.
+- Local state and event evidence persist across cycles. Protect that directory as operational data; it reveals stream IDs and monitoring history. Temporary captures and operational process arguments may contain private source information.
 - Notifications use stable event IDs and at most three delivery attempts, scheduled at 0, 30, and 120 seconds. Delivery is at-least-once: a receiver may accept a message before a connection fails, so a retry can duplicate it. SMTP acceptance or webhook success is protocol evidence, not proof a person read an alert.
 - This tool does not take over streams, restart encoders, change broadcast scenes, or operate OBS.
 

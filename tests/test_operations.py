@@ -10,6 +10,7 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import dead_air
@@ -27,6 +28,10 @@ def local_runner(argv, _timeout, **_kwargs):
 
 
 class ConfigurationOperationsTests(unittest.TestCase):
+    def test_bundled_starter_and_repository_example_are_identical(self):
+        from importlib.resources import files
+        self.assertEqual(files("deadair").joinpath("example.toml").read_bytes(), EXAMPLE.read_bytes())
+
     def test_direct_doctor_does_not_require_optional_youtube_tool(self):
         config = test_config()
         with patch.object(dead_air.shutil, "which", side_effect=lambda tool: None if tool == config.tools.yt_dlp else tool):
@@ -76,6 +81,12 @@ class ConfigurationOperationsTests(unittest.TestCase):
     def test_explicit_zero_port_is_rejected(self):
         with self.assertRaises(dead_air.ConfigError):
             dead_air._static_url("https://example.invalid:0/live", "direct")
+
+    def test_extremely_large_toml_number_has_a_bounded_validation_error(self):
+        raw = tomllib.loads(EXAMPLE.read_text())
+        raw["watch"]["interval_s"] = 10 ** 1000
+        with self.assertRaises(dead_air.ConfigError):
+            dead_air.validate_config(raw)
 
 
 class SchedulingOperationsTests(unittest.TestCase):
@@ -131,6 +142,41 @@ class SchedulingOperationsTests(unittest.TestCase):
 
 
 class PersistenceOperationsTests(unittest.TestCase):
+    def test_failed_guard_publication_leaves_no_partial_lock_and_can_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            with patch("deadair.persistence.os.link", side_effect=OSError("fixture")):
+                with self.assertRaises(dead_air.PersistenceError):
+                    dead_air.IncidentStore(path)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+            with dead_air.IncidentStore(path):
+                self.assertEqual(path.with_name(".dead-air.lock").read_bytes(), dead_air.IncidentStore.LEGACY_GUARD)
+
+    def test_legacy_writer_cannot_open_while_new_writer_owns_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            with dead_air.IncidentStore(path):
+                legacy = Path(directory) / ".dead-air.lock"
+                # This is the original release's exact exclusive ownership step.
+                with self.assertRaises(FileExistsError):
+                    descriptor = os.open(legacy, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                    os.close(descriptor)
+
+    def test_a_late_cycle_commit_does_not_refresh_an_old_sample(self):
+        from deadair.status import read_status
+        from test_incidents import observation
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = test_config()
+            path = Path(directory) / "state.db"
+            cfg = dataclasses.replace(cfg, watch=dataclasses.replace(cfg.watch, state_path=str(path)))
+            at = datetime.fromtimestamp(100, timezone.utc).isoformat()
+            with dead_air.IncidentStore(path) as store:
+                committed_at = 100 + cfg.streams[0].max_gap_s + 1
+                store.record_cycle(cfg, (observation("HEALTHY", at=at),), committed_at, 0)
+                result = read_status(cfg, now_wall=committed_at)
+                self.assertEqual(result["status"], "UNKNOWN")
+                self.assertIn("OBSERVATION_STALE", result["streams"][0]["reason_codes"])
+
     def test_one_writer_per_database_and_separate_databases_share_a_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             first, second = Path(directory) / "first.db", Path(directory) / "second.db"
@@ -154,8 +200,8 @@ class PersistenceOperationsTests(unittest.TestCase):
         from test_incidents import config, observation, silence
         destination = dead_air.DestinationConfig("ops", "webhook", endpoint_env="FIXTURE_URL")
         cfg = config(min_bad=1, unhealthy=0, recovery=2, destinations=(destination,))
-        bad = observation(audio=silence(), reasons=("AUDIO_SILENCE",))
-        good = observation("HEALTHY")
+        bad = observation(audio=silence(), reasons=("AUDIO_SILENCE",), at="1970-01-01T00:01:40Z")
+        good = observation("HEALTHY", at="1970-01-01T00:01:41Z")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
             cfg = dataclasses.replace(cfg, watch=dataclasses.replace(cfg.watch, state_path=str(path)))
@@ -185,7 +231,7 @@ class PersistenceOperationsTests(unittest.TestCase):
             self.assertEqual(read_status(cfg, now_wall=100)["status"], "UNKNOWN")
             self.assertFalse(path.parent.exists())
             with dead_air.IncidentStore(path) as store:
-                store.record_cycle(cfg, (observation("HEALTHY"),), 100, 0)
+                store.record_cycle(cfg, (observation("HEALTHY", at="1970-01-01T00:01:40Z"),), 100, 0)
                 self.assertEqual(read_status(cfg, now_wall=101)["status"], "HEALTHY")
                 self.assertEqual(read_status(cfg, now_wall=100 + cfg.streams[0].max_gap_s + 1)["status"], "UNKNOWN")
                 self.assertEqual(read_status(cfg, now_wall=99)["status"], "UNKNOWN")
@@ -223,6 +269,25 @@ class PersistenceOperationsTests(unittest.TestCase):
 
 
 class LifecycleOperationsTests(unittest.TestCase):
+    def test_http_connector_uses_validated_ip_without_reresolving_hostname(self):
+        from types import SimpleNamespace
+        connection = SimpleNamespace(timeout=1, port=443, host="example.invalid", sock=None)
+        sock = unittest.mock.Mock()
+        with patch.object(dead_air.socket, "socket", return_value=sock), \
+                patch.object(dead_air.socket, "getaddrinfo") as dns:
+            dead_air._connect_pinned(connection, ("93.184.216.34",))
+        dns.assert_not_called()
+        sock.connect.assert_called_once_with(("93.184.216.34", 443))
+        self.assertIs(connection.sock, sock)
+
+    def test_system_dns_runs_in_an_owned_bounded_child(self):
+        failure = dead_air.ChildResult("", "", None, timed_out=True)
+        with patch.object(dead_air, "run_bounded", return_value=failure) as runner:
+            with self.assertRaises(dead_air.PolicyError):
+                dead_air._resolve_addresses("example.invalid", 443, timeout_s=0.05)
+        self.assertLessEqual(runner.call_args.args[1], 0.05)
+        self.assertNotIn("shell=True", str(runner.call_args))
+
     @unittest.skipUnless(sys.platform == "linux", "Linux process-state inspection")
     def test_exited_parent_cannot_leave_an_owned_descendant_holding_pipes(self):
         import signal
