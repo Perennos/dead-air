@@ -1755,14 +1755,19 @@ def check_cycle(
     started = clock()
     history = thumbnail_history if thumbnail_history is not None else {}
     results: list[Observation] = []
-    for stream in config.streams:
-        if clock() - started >= config.watch.cycle_budget_s:
+    for index, stream in enumerate(config.streams):
+        now = clock()
+        remaining = started + config.watch.cycle_budget_s - now
+        if remaining <= 0:
             results.append(_unknown_observation(stream, "CYCLE_BUDGET_EXHAUSTED"))
             continue
         try:
             if observer is None:
+                # Unused time is available to later streams; one slow source cannot
+                # consume every subsequent source's entire observation window.
+                stream_deadline = now + remaining / (len(config.streams) - index)
                 result = observe_stream(config, stream, thumbnail_history=history,
-                                       deadline=started + config.watch.cycle_budget_s)
+                                       deadline=stream_deadline)
             else:
                 result = observer(config, stream)
         except Exception:
@@ -1789,11 +1794,14 @@ def watch_cycles(
     cycle: Callable[[AppConfig], tuple[Observation, ...]] = check_cycle,
     sleeper: Callable[[float], None] = time.sleep,
     store: "IncidentStore | None" = None,
+    clock: Callable[[], float] | None = None,
 ) -> Iterator[tuple[Observation, ...]]:
     _validate_watch_mode(max_cycles, continuous)
     remaining = None if continuous else max_cycles
     thumbnail_history: dict[str, ThumbnailBaseline] = {}
+    clock = clock or time.monotonic
     while remaining is None or remaining > 0:
+        started = clock()
         if cycle is check_cycle:
             batch = check_cycle(config, thumbnail_history=thumbnail_history)
         else:
@@ -1806,7 +1814,7 @@ def watch_cycles(
             remaining -= 1
             if remaining == 0:
                 break
-        sleeper(config.watch.interval_s)
+        sleeper(max(0.0, config.watch.interval_s - (clock() - started)))
 
 
 class PersistenceError(RuntimeError):
@@ -2219,11 +2227,11 @@ def _incident_signals(observation: Observation) -> dict[str, str]:
         "video_freeze": "bad" if "VIDEO_FREEZE" in observation.video.reason_codes else
                         ("good" if video_good else "unknown"),
         "video_missing": "bad" if "VIDEO_MISSING" in observation.video.reason_codes else
-                         ("good" if video_good else "unknown"),
+                         ("good" if has_fresh_valid_media(observation.video) else "unknown"),
         "audio_silence": "bad" if "AUDIO_SILENCE" in observation.audio.reason_codes else
                          ("good" if audio_good else "unknown"),
         "audio_missing": "bad" if "AUDIO_MISSING" in observation.audio.reason_codes else
-                         ("good" if audio_good else "unknown"),
+                         ("good" if has_fresh_valid_media(observation.audio) else "unknown"),
         "unknown": "bad" if unknown else ("good" if known else "unknown"),
         "degraded": "bad" if status == "DEGRADED" else
                     ("good" if status in {"HEALTHY", "UNHEALTHY", "OFF_AIR"} else "unknown"),

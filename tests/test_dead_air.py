@@ -815,7 +815,8 @@ class ProcessAndPolicyTests(unittest.TestCase):
                 dead_air.DimensionEvidence("HEALTHY", ("AUDIO_DECODED_NO_EVENT",)),
                 dead_air.DimensionEvidence("HEALTHY", ("VIDEO_DECODED_NO_EVENT",)),
             ),)
-        cycles = list(dead_air.watch_cycles(self.config, 3, cycle=cycle, sleeper=sleeps.append))
+        cycles = list(dead_air.watch_cycles(self.config, 3, cycle=cycle,
+                                           sleeper=sleeps.append, clock=lambda: 100.0))
         self.assertEqual(len(cycles), 3)
         self.assertEqual(len(observed), 3)
         self.assertEqual(sleeps, [self.config.watch.interval_s] * 2)

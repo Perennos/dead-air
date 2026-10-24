@@ -77,5 +77,57 @@ class ConfigurationOperationsTests(unittest.TestCase):
             dead_air._static_url("https://example.invalid:0/live", "direct")
 
 
+class SchedulingOperationsTests(unittest.TestCase):
+    def test_each_stream_gets_a_share_of_the_remaining_deadline(self):
+        base = test_config()
+        streams = tuple(dataclasses.replace(base.streams[0], id=f"stream-{i}") for i in range(3))
+        config = dataclasses.replace(base, streams=streams,
+                                     watch=dataclasses.replace(base.watch, cycle_budget_s=30))
+        now = [100.0]
+        deadlines = []
+
+        def observe(_config, stream, **kwargs):
+            deadline = kwargs["deadline"]
+            deadlines.append(deadline)
+            now[0] = deadline
+            return dead_air._unknown_observation(stream, "FIXTURE_TIMEOUT")
+
+        with patch.object(dead_air, "observe_stream", side_effect=observe):
+            result = dead_air.check_cycle(config, clock=lambda: now[0])
+        self.assertEqual(deadlines, [110, 120, 130])
+        self.assertEqual([item.stream_id for item in result], [item.id for item in streams])
+
+    def test_watch_interval_is_start_to_start_and_overruns_do_not_catch_up(self):
+        for cycle_s, expected_sleep in ((7, 23), (40, 0)):
+            with self.subTest(cycle_s=cycle_s):
+                config = test_config()
+                config = dataclasses.replace(config, watch=dataclasses.replace(config.watch, interval_s=30))
+                now = [100.0]
+                starts, sleeps = [], []
+                def cycle(_config):
+                    starts.append(now[0])
+                    now[0] += cycle_s
+                    return ()
+                def sleep(seconds):
+                    sleeps.append(seconds)
+                    now[0] += seconds
+                list(dead_air.watch_cycles(config, 3, cycle=cycle, sleeper=sleep, clock=lambda: now[0]))
+                self.assertEqual(sleeps, [expected_sleep, expected_sleep])
+                self.assertEqual(starts, [100, 100 + max(30, cycle_s), 100 + 2 * max(30, cycle_s)])
+
+    def test_missing_track_recovers_into_silent_or_frozen_media(self):
+        from test_incidents import config, observation, silence, freeze
+        cfg = config(min_bad=1, unhealthy=0, recovery=1)
+        missing = observation("UNKNOWN", audio=dead_air.DimensionEvidence("UNKNOWN", ("AUDIO_MISSING",)),
+                              video=dead_air.DimensionEvidence("UNKNOWN", ("VIDEO_MISSING",)))
+        both = observation("UNHEALTHY", audio=silence(), video=freeze(),
+                           reasons=("AUDIO_SILENCE", "VIDEO_FREEZE"))
+        with tempfile.TemporaryDirectory() as directory, dead_air.IncidentStore(Path(directory) / "state.db") as store:
+            store.record_cycle(cfg, (missing,), 100, 0)
+            self.assertEqual({row[1] for row in store.open_incidents()}, {"audio_missing", "video_missing"})
+            store.record_cycle(cfg, (both,), 101, 1)
+            self.assertEqual({row[1] for row in store.open_incidents()}, {"audio_silence", "video_freeze"})
+
+
 if __name__ == "__main__":
     unittest.main()
