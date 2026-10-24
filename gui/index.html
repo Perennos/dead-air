@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="x-token" content="__TOKEN__">
+<title>Dead Air</title>
+<link rel="icon" href="/brand/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="band">
+  <h1 class="title">DEAD AIR</h1>
+  <p class="band-stats" id="band-stats">Loading</p>
+  <button type="button" class="btn btn-test" id="test-alerts">Test my alerts</button>
+</header>
+<main class="page">
+  <p class="note" id="notice" aria-live="polite" hidden></p>
+  <section class="alerts" aria-labelledby="alerts-h">
+    <h2 class="label" id="alerts-h">Alerts</h2>
+    <p class="line" id="alerts-line"></p>
+    <ul class="results" id="alert-results" aria-live="polite"></ul>
+  </section>
+  <section aria-labelledby="streams-h">
+    <h2 class="sr-only" id="streams-h">Streams</h2>
+    <p class="line" id="empty" hidden>No streams yet. Add one below.</p>
+    <div class="grid" id="streams"></div>
+  </section>
+  <section class="add" aria-labelledby="add-h">
+    <h2 class="section-title" id="add-h">Add a stream</h2>
+    <p class="line">Only add a stream you own or are allowed to monitor.</p>
+    <form class="form" id="add-form" autocomplete="off">
+      <div class="field">
+        <label for="stream-name">Name</label>
+        <input id="stream-name" name="name" type="text" required maxlength="80" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="stream-url">Stream URL</label>
+        <input id="stream-url" name="url" type="url" required maxlength="4096" inputmode="url" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="stream-source">Source</label>
+        <select id="stream-source" name="source">
+          <option value="youtube">YouTube link</option>
+          <option value="direct">Direct media URL</option>
+        </select>
+      </div>
+      <button type="submit" class="btn" id="add-submit">Add stream</button>
+      <p class="msg" id="form-msg" aria-live="polite"></p>
+    </form>
+  </section>
+  <noscript><p class="note is-error">This page needs JavaScript to show your streams.</p></noscript>
+</main>
+<script src="/app.js" defer></script>
+</body>
+</html>

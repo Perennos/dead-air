@@ -11,13 +11,18 @@
 <p align="center"><strong>Nobody should find out their stream died from a comment at 3 a.m.</strong><br>
 A 24/7 stream watchdog: off-air, frozen picture, silence.</p>
 
+1. Double-click `install.cmd` (macOS/Linux: `bash install.sh`).
+2. Click the Dead Air shortcut, add your stream, press **Test my alerts**.
+
+The GUI is a local page on 127.0.0.1 only.
+
 ## What it does
 
 A stream can be live on the platform and dead on screen. DEAD AIR watches a stream you own and alerts you when the stream goes off-air, freezes, or goes silent, even while the platform still says you're live. Chat is a terrible uptime monitor.
 
 Each cycle it pulls a short sample of the real stream (12 seconds in the example config) and runs ffmpeg's freezedetect and silencedetect on it. yt-dlp resolves YouTube links. A provider thumbnail is a degraded fallback, off in the example.
 
-You need Python 3.11+, ffmpeg and ffprobe, a URL you own, one TOML file, and somewhere to be alerted: ntfy, a Discord webhook, email, or a generic webhook. No stream account, no provider API key, one Python file.
+You need Python 3.11+, ffmpeg and ffprobe, a URL you own, one TOML file, and somewhere to be alerted: ntfy, a Discord webhook, email, or a generic webhook. No stream account, no provider API key, one Python file (the optional GUI adds a second, `dead_air_gui.py`).
 
 The command line offers:
 
@@ -25,6 +30,7 @@ The command line offers:
 - **doctor** — inspect local binary versions and detector filters.
 - **check** — perform one bounded observation cycle.
 - **watch** — choose exactly one mode: **--max-cycles N** for a finite run (1–10,000 cycles), or **--continuous** for the authorized foreground 24/7 monitoring path. Both modes run one serial cycle at a time, keep the existing per-cycle and notification bounds, and flush one JSON observation line as each cycle completes. Continuous mode ends on Ctrl+C (exit 130, after owned-child and state cleanup) or a fatal persistence/sender-cleanup failure (exit 3 with a flushed error; sender-cleanup failure is persisted before stopping when the state write succeeds). It does not daemonize or automatically restart.
+- **gui** — serve a local page on 127.0.0.1 over the same config and state file (see [GUI](#gui)).
 
 ## Install
 
@@ -143,6 +149,18 @@ python dead_air.py watch --config dead-air.toml --continuous --json
 ~~~
 
 This runs in the foreground, one cycle at a time, waits `interval_s` between cycles (60 seconds in the example), and prints one line of JSON per cycle. When a problem lasts long enough, it sends an alert to your destination. After `recovery_samples` good samples (2 in the example), it sends a recovery message. Ctrl+C stops it cleanly (exit 130, after owned-child and state cleanup). It does not daemonize and does not restart itself. Keeping it running, with systemd or Task Scheduler or whatever you like, is your call.
+
+## GUI
+
+`install.cmd` (or `bash install.sh`) makes a `.venv`, installs `requirements.txt` and adds a Dead Air shortcut: Start menu and Desktop on Windows, a `.desktop` launcher on Linux, `Dead Air.command` on the macOS Desktop. It checks for ffmpeg and ffprobe and prints where to get them; it never installs them or Python. `install.cmd /dry-run` and `bash install.sh --dry-run` show the steps and change nothing. Python 3.11 or newer is required.
+
+The shortcut runs `python dead_air.py gui --config dead-air.toml`: a page on 127.0.0.1 only (`--port N` picks the port, `--no-browser` skips opening one). Every run has its own token, which the page sends with each change; requests with another Host or Origin are refused.
+
+- **Status.** Each stream shows its status, open incidents, last alert and last check, read from the state file without writing to it.
+- **Add a stream.** The entry is checked by the same loader as `validate`, then `dead-air.toml` is replaced in one step. If the file does not exist it is created from `dead-air.example.toml`, pointing `yt_dlp` at this folder's `.venv` when yt-dlp is installed there. Destinations are not edited; add them to the TOML as in First five minutes.
+- **Test my alerts.** Sends one labelled test alert through each destination, one attempt each. This is the only network action the page takes, and only on that click. Endpoints are read from environment variables, so the shortcut needs them set too, or the test reports `ENDPOINT_UNAVAILABLE`.
+
+The page does not run checks. Start the watcher as in First five minutes, step 5; until it has recorded a cycle the page says "not watching". The state file comes from `watch.state_path` relative to where each program starts, so start both from the project folder, as the shortcut does.
 
 ## First check
 
