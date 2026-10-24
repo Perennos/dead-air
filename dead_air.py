@@ -325,7 +325,7 @@ def _static_url(url: str, source: str, *, thumbnail: bool = False) -> tuple[str,
     try:
         parsed = urllib.parse.urlsplit(url)
         host = parsed.hostname
-        port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+        port = parsed.port if parsed.port is not None else (443 if parsed.scheme.lower() == "https" else 80)
     except ValueError:
         raise ConfigError("URL host or port is malformed") from None
     if parsed.username is not None or parsed.password is not None:
@@ -480,11 +480,25 @@ def validate_config(data: dict[str, Any]) -> AppConfig:
 
 def load_config(path: str | os.PathLike[str]) -> AppConfig:
     try:
-        with Path(path).open("rb") as handle:
+        config_path = Path(path).expanduser().absolute()
+        with config_path.open("rb") as handle:
             data = tomllib.load(handle)
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"cannot read config ({type(exc).__name__})") from None
-    return validate_config(data)
+    config = validate_config(data)
+    parent = config_path.parent
+    state = Path(config.watch.state_path).expanduser()
+    if not state.is_absolute():
+        state = parent / state
+    tool_paths = {}
+    for name in ("ffmpeg", "ffprobe", "yt_dlp"):
+        value = getattr(config.tools, name)
+        if "/" in value or "\\" in value:
+            candidate = Path(value).expanduser()
+            value = str(candidate if candidate.is_absolute() else parent / candidate)
+        tool_paths[name] = value
+    return replace(config, watch=replace(config.watch, state_path=str(state)),
+                   tools=ToolsConfig(**tool_paths))
 
 
 def _env_name(value: Any, name: str) -> str:
@@ -512,7 +526,7 @@ def _parse_destinations(raw: Any) -> tuple[DestinationConfig, ...]:
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             raise ConfigError(f"destinations[{index}] must be a table")
-        kind = item.get("type")
+        kind = _string(item.get("type"), f"destinations[{index}].type", 16)
         if kind in {"ntfy", "discord", "webhook"}:
             required = {"id", "type", "endpoint_env"}
             optional = ({"token_env"} if kind in {"ntfy", "webhook"} else set()) | {"allow_private"}
@@ -2606,19 +2620,21 @@ def _exit_code(observations: Sequence[Observation]) -> int:
 def doctor(config: AppConfig, *, runner: Callable[..., ChildResult] = run_bounded) -> dict[str, Any]:
     tools: dict[str, Any] = {}
     resolver_flags_ok = False
+    resolver_required = any(stream.source == "youtube" for stream in config.streams)
     for name, executable, args in (
         ("yt_dlp", config.tools.yt_dlp, ("--version",)),
         ("ffmpeg", config.tools.ffmpeg, ("-version",)),
         ("ffprobe", config.tools.ffprobe, ("-version",)),
     ):
         path = shutil.which(executable)
+        required = name != "yt_dlp" or resolver_required
         if path is None:
-            tools[name] = {"available": False}
+            tools[name] = {"available": False, "required": required}
             continue
         result = runner(build_argv(path, *args), 5, max_output_bytes=32768)
         first_line = result.stdout.splitlines()[0][:160] if result.stdout else ""
         tools[name] = {"available": result.returncode == 0 and not result.timed_out and not result.output_limited and result.cleanup_complete,
-                       "version": first_line or None}
+                       "version": first_line or None, "required": required}
         if name == "yt_dlp" and tools[name]["available"]:
             help_result = runner(build_argv(path, "--help"), 5, max_output_bytes=262144)
             help_text = help_result.stdout + help_result.stderr
@@ -2633,11 +2649,23 @@ def doctor(config: AppConfig, *, runner: Callable[..., ChildResult] = run_bounde
     if ffmpeg_path:
         filters = runner(build_argv(ffmpeg_path, "-hide_banner", "-filters"), 5, max_output_bytes=65536)
         text = filters.stdout + filters.stderr
-        filters_ok = filters.returncode == 0 and "freezedetect" in text and "silencedetect" in text
+        filters_ok = (filters.returncode == 0 and not filters.timed_out
+                      and not filters.output_limited and filters.cleanup_complete
+                      and "freezedetect" in text and "silencedetect" in text)
     tools["detector_filters_available"] = filters_ok
     tools["resolver_isolation_flags_available"] = resolver_flags_ok
-    return {"ok": all(tools.get(name, {}).get("available", False) for name in ("yt_dlp", "ffmpeg", "ffprobe"))
-            and filters_ok and resolver_flags_ok,
+    warnings = []
+    if config.watch.sample_s + CAPTURE_STARTUP_S > config.watch.capture_timeout_s:
+        warnings.append("CAPTURE_TIMEOUT_SHORTER_THAN_SAMPLE")
+    if any(stream.max_gap_s < config.watch.interval_s for stream in config.streams):
+        warnings.append("MAX_GAP_SHORTER_THAN_INTERVAL")
+    if not config.destinations:
+        warnings.append("NO_NOTIFICATION_DESTINATIONS")
+    if len(config.streams) > 1 and config.watch.cycle_budget_s / len(config.streams) < config.watch.sample_s + CAPTURE_STARTUP_S:
+        warnings.append("CYCLE_BUDGET_TOO_SMALL_FOR_ALL_SAMPLES")
+    return {"ok": all(item["available"] for item in tools.values()
+                       if isinstance(item, dict) and item["required"])
+            and filters_ok and (resolver_flags_ok or not resolver_required), "warnings": warnings,
             "tools": tools, "network_contacted": False}
 
 
