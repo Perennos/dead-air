@@ -51,6 +51,16 @@ the basis for the completion claim.
   The [research handoff](RESEARCH_AND_NEXT_STEPS.md#argon--ponytail-handoff)
   preserves the requested follow-up.
 
+## In progress
+
+GitHub publication is blocked by credentials/connection scope. Direct Git push
+reported no username credentials; connected GitHub tree creation and branch
+creation each returned HTTP 403 `Resource not accessible by integration`.
+No branch, PR, CI run, merge, or release was created. The local commits, exact
+patch, complete source, tested wheel and Git bundle are preserved for handoff.
+The connection must gain write access to this repository before publication;
+no change to ChatGPT's approval preference can grant missing GitHub OAuth/app scope.
+
 No artwork or product UI changed in this patch. The final read-only audit was
 domain QC of behavior, packaging, privacy, documentation, attribution and tests.
 Future product items are explicitly separated in the research record, with
