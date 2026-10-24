@@ -93,9 +93,11 @@ paper because ember on cream is 2.4:1 (fails); infrared is 4.3:1 at 46 px.
 ### Mark and motion
 - The calavera is built from broadcast gear, as locked: the eye sockets are NO SIGNAL colour-bar cards in the
   house colours (bone · marigold · mint · lilac · rosa · red, with a dark lower strip like a test card's
-  castellations); the teeth are eight VU-meter bars with red peak caps; the crown is nine cempasúchil petals
-  whose heights follow a waveform envelope, with rosa inner petals. Traditional calavera decoration is kept small
-  and respectful: dot rings around the sockets, an inverted-heart nasal cavity, a five-petal flower on the brow.
+  castellations); the teeth are eight VU-meter bars with red peak caps; the crown is a cempasúchil flower crown:
+  nine ruffled marigold pompoms whose size and height follow a waveform envelope, with small rosa and lilac
+  blooms between them (revised 24 Oct 2026 after review: the first version's blade petals could read as a
+  feather headdress, which is not this tradition's imagery). Traditional calavera decoration is kept small
+  and respectful: dot rings around the sockets, an inverted-heart nasal cavity (no stem), a five-petal flower on the brow.
 - `mark.svg` carries the colour-bar eyes (the live state); `mark-dead.svg` is the alert state with red,
   glowing sockets. `favicon.svg` simplifies to the skull, two three-bar eyes, five teeth, five petals.
 - Loop: 8 s. 0–53 %: nine papel picado pennants hang from a sagging string and flutter (rotate ± 2.2° and skew
@@ -115,7 +117,7 @@ The kit draws on three of its objects as remembrance and celebration, never as c
   San Salvador Huixcolotla, Puebla. Here the cut pattern is the stream's waveform; the flatline is the moment
   the banner goes still.
 - **Cempasúchil** (*Tagetes erecta*, the Mexican marigold), whose colour and scent are said to guide the dead to
-  the ofrenda; its petals are the crown, cut as waveform peaks.
+  the ofrenda; its blooms are the crown, rising and growing with the waveform.
 - **The calavera**, from the sugar skulls (*calaveras de azúcar*) placed on ofrendas and from José Guadalupe
   Posada's calavera prints (La Calavera Garbancera, c. 1910, later Diego Rivera's Catrina); the broadcast-gear
   face is the project's own joke on the type, and the sockets, teeth and crown stay cheerful.
