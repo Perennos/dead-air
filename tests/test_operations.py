@@ -1,6 +1,7 @@
 """Operator-facing regressions; no public network or real notification targets."""
 
 import dataclasses
+import io
 import json
 import os
 import subprocess
@@ -127,6 +128,98 @@ class SchedulingOperationsTests(unittest.TestCase):
             self.assertEqual({row[1] for row in store.open_incidents()}, {"audio_missing", "video_missing"})
             store.record_cycle(cfg, (both,), 101, 1)
             self.assertEqual({row[1] for row in store.open_incidents()}, {"audio_silence", "video_freeze"})
+
+
+class PersistenceOperationsTests(unittest.TestCase):
+    def test_one_writer_per_database_and_separate_databases_share_a_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first, second = Path(directory) / "first.db", Path(directory) / "second.db"
+            with dead_air.IncidentStore(first):
+                with self.assertRaisesRegex(dead_air.PersistenceError, "STATE_LOCKED"):
+                    dead_air.IncidentStore(first)
+                with dead_air.IncidentStore(second):
+                    self.assertTrue(second.exists())
+
+    def test_lock_is_released_by_os_after_abrupt_process_exit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            code = "import os,sys; from dead_air import IncidentStore; s=IncidentStore(sys.argv[1]); os._exit(0)"
+            result = subprocess.run([sys.executable, "-c", code, str(path)], timeout=5, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            with dead_air.IncidentStore(path) as store:
+                self.assertEqual(store.open_incidents(), [])
+
+    def test_read_only_status_during_watch_preserves_counters_and_reports_deliveries(self):
+        from dead_air_status import read_status
+        from test_incidents import config, observation, silence
+        destination = dead_air.DestinationConfig("ops", "webhook", endpoint_env="FIXTURE_URL")
+        cfg = config(min_bad=1, unhealthy=0, recovery=2, destinations=(destination,))
+        bad = observation(audio=silence(), reasons=("AUDIO_SILENCE",))
+        good = observation("HEALTHY")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            cfg = dataclasses.replace(cfg, watch=dataclasses.replace(cfg.watch, state_path=str(path)))
+            with dead_air.IncidentStore(path) as store:
+                store.record_cycle(cfg, (bad,), 100, 0)
+                store.record_cycle(cfg, (good,), 101, 1)
+                snapshot = read_status(cfg, now_wall=102)
+                self.assertEqual(snapshot["status"], "UNHEALTHY")
+                self.assertEqual(snapshot["streams"][0]["observation_status"], "HEALTHY")
+                self.assertEqual(snapshot["deliveries"]["pending"], 1)
+                self.assertEqual(snapshot["open_incidents"][0]["condition"], "audio_silence")
+                self.assertNotIn("https://", json.dumps(snapshot))
+                self.assertNotIn("FIXTURE_URL", json.dumps(snapshot))
+                store.record_cycle(cfg, (good,), 102, 2)
+                self.assertEqual(store.open_incidents(), [])
+            with dead_air.IncidentStore(path):
+                snapshot = read_status(cfg, now_wall=103)
+                self.assertEqual(snapshot["streams"][0]["observation_status"], "HEALTHY")
+
+    def test_status_marks_absent_stale_rollback_and_changed_sources_unknown(self):
+        from dead_air_status import read_status
+        from test_incidents import observation
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = test_config()
+            path = Path(directory) / "not-created" / "state.db"
+            cfg = dataclasses.replace(cfg, watch=dataclasses.replace(cfg.watch, state_path=str(path)))
+            self.assertEqual(read_status(cfg, now_wall=100)["status"], "UNKNOWN")
+            self.assertFalse(path.parent.exists())
+            with dead_air.IncidentStore(path) as store:
+                store.record_cycle(cfg, (observation("HEALTHY"),), 100, 0)
+                self.assertEqual(read_status(cfg, now_wall=101)["status"], "HEALTHY")
+                self.assertEqual(read_status(cfg, now_wall=100 + cfg.streams[0].max_gap_s + 1)["status"], "UNKNOWN")
+                self.assertEqual(read_status(cfg, now_wall=99)["status"], "UNKNOWN")
+                changed = dataclasses.replace(cfg, streams=(dataclasses.replace(cfg.streams[0], url="https://example.invalid/changed"),))
+                self.assertEqual(read_status(changed, now_wall=101)["status"], "UNKNOWN")
+
+    def test_legacy_lock_is_never_removed_or_bypassed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            legacy = Path(directory) / ".dead-air.lock"
+            legacy.write_text("unknown owner")
+            with self.assertRaises(dead_air.PersistenceError):
+                dead_air.IncidentStore(Path(directory) / "state.db")
+            self.assertEqual(legacy.read_text(), "unknown owner")
+
+    def test_check_has_human_output_and_json_contains_alert_diagnostics(self):
+        from test_incidents import observation
+        with tempfile.TemporaryDirectory() as directory:
+            config = test_config()
+            config = dataclasses.replace(config, watch=dataclasses.replace(config.watch, state_path=str(Path(directory) / "state.db")))
+            for json_mode in (False, True):
+                output = io.StringIO()
+                with patch.object(dead_air, "load_config", return_value=config), \
+                        patch.object(dead_air, "check_cycle", return_value=(observation("HEALTHY"),)), \
+                        patch("sys.stdout", output):
+                    code = dead_air.main(["check"] + (["--json"] if json_mode else []))
+                self.assertEqual(code, 0)
+                if json_mode:
+                    result = json.loads(output.getvalue())
+                    self.assertIn("observations", result)
+                    self.assertIn("deliveries", result)
+                else:
+                    self.assertIn("sample-channel", output.getvalue())
+                    self.assertIn("HEALTHY", output.getvalue())
+                    self.assertFalse(output.getvalue().startswith("{"))
 
 
 if __name__ == "__main__":

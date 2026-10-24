@@ -27,7 +27,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from fractions import Fraction
 from pathlib import Path, PureWindowsPath
@@ -1900,21 +1900,22 @@ class IncidentStore:
         self.directory = self.path.parent
         self.retention_days = retention_days
         self._db: sqlite3.Connection | None = None
-        self._lock_path = self.directory / ".dead-air.lock"
-        self._lock_token = uuid.uuid4().hex
+        self._lock_path = self.path.with_name(self.path.name + ".lock")
+        self._lock_fd: int | None = None
         try:
-            self.directory.mkdir(parents=True, exist_ok=True)
+            self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             if self.directory.is_symlink() or self.path.is_symlink():
                 raise PersistenceError("STATE_PATH_UNSAFE")
-            descriptor = os.open(self._lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            with os.fdopen(descriptor, "w", encoding="ascii") as lock:
-                lock.write(f"{self._lock_token}\tpid={os.getpid()}\tcreated={utc_now()}\n")
-                lock.flush()
-                os.fsync(lock.fileno())
+            legacy_lock = self.directory / ".dead-air.lock"
+            if legacy_lock.exists() or legacy_lock.is_symlink():
+                raise PersistenceError("STATE_LOCKED")
+            self._acquire_lock()
             existed = self.path.exists()
             if existed and self.path.stat().st_size == 0:
                 raise PersistenceError("STATE_CORRUPT")
             self._db = sqlite3.connect(str(self.path), timeout=5, isolation_level=None)
+            if not existed:
+                os.chmod(self.path, 0o600)
             self._db.execute("PRAGMA foreign_keys=ON")
             self._db.execute("PRAGMA busy_timeout=5000")
             version = int(self._db.execute("PRAGMA user_version").fetchone()[0])
@@ -1925,8 +1926,14 @@ class IncidentStore:
             if self._db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise PersistenceError("STATE_CORRUPT")
             self._db.execute("BEGIN IMMEDIATE")
-            self._db.execute("UPDATE stream_state SET state_json=?",
-                              ('{"version":1,"pending":{},"recoveries":{}}',))
+            for stream_id, raw_state in self._db.execute("SELECT stream_id,state_json FROM stream_state").fetchall():
+                state = json.loads(raw_state)
+                # Monotonic counters cannot cross process lifetimes. Keep the last
+                # observation for readers, but never use it as new transition evidence.
+                saved = {key: state[key] for key in ("latest", "last_observed_wall", "config_fingerprint") if key in state}
+                saved.update({"version": self.SCHEMA, "pending": {}, "recoveries": {}})
+                self._db.execute("UPDATE stream_state SET state_json=? WHERE stream_id=?",
+                                 (json.dumps(saved, separators=(",", ":")), stream_id))
             self._db.execute("COMMIT")
         except FileExistsError:
             self._close_db()
@@ -1939,7 +1946,7 @@ class IncidentStore:
             self._close_db()
             self._release_lock()
             raise PersistenceError("STATE_CORRUPT") from None
-        except (OSError, ValueError):
+        except (OSError, ValueError, TypeError):
             self._close_db()
             self._release_lock()
             raise PersistenceError("STATE_UNAVAILABLE") from None
@@ -1979,12 +1986,41 @@ class IncidentStore:
                 pass
             self._db = None
 
-    def _release_lock(self) -> None:
+    def _acquire_lock(self) -> None:
+        if self._lock_path.is_symlink():
+            raise PersistenceError("STATE_PATH_UNSAFE")
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+        descriptor = os.open(self._lock_path, flags, 0o600)
         try:
-            if self._lock_path.read_text(encoding="ascii").startswith(self._lock_token + "\t"):
-                self._lock_path.unlink()
+            if os.name == "nt":
+                import msvcrt
+                if os.fstat(descriptor).st_size == 0:
+                    os.write(descriptor, b"\0")
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            pass
+            os.close(descriptor)
+            raise PersistenceError("STATE_LOCKED") from None
+        self._lock_fd = descriptor
+
+    def _release_lock(self) -> None:
+        if self._lock_fd is not None:
+            descriptor, self._lock_fd = self._lock_fd, None
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+        # Keep the inode: unlinking a lock file lets competing processes lock
+        # different files at the same path and both believe they own the database.
 
     def close(self) -> None:
         self._close_db()
@@ -2117,6 +2153,9 @@ class IncidentStore:
                             pending.pop(condition, None)
                     # Unknown evidence neither advances nor resolves another condition.
                 state["last_wall"], state["last_mono"] = now_wall, now_mono
+                state["latest"] = observation_json(observation)
+                state["last_observed_wall"] = now_wall
+                state["config_fingerprint"] = stream_fingerprint(stream)
                 raw_state = json.dumps(state, sort_keys=True, separators=(",", ":"))
                 self._db.execute(
                     "INSERT INTO stream_state VALUES(?,?) ON CONFLICT(stream_id) DO UPDATE SET state_json=excluded.state_json",
@@ -2198,6 +2237,22 @@ class IncidentStore:
     def deliveries(self) -> list[tuple[Any, ...]]:
         assert self._db is not None
         return self._db.execute("SELECT event_id,destination_id,status,attempts,last_error,last_http_status FROM deliveries ORDER BY event_id,destination_id").fetchall()
+
+    def diagnostics(self) -> dict[str, Any]:
+        assert self._db is not None
+        try:
+            counts = {"pending": 0, "sent": 0, "failed": 0}
+            counts.update(dict(self._db.execute("SELECT status,COUNT(*) FROM deliveries GROUP BY status")))
+            return {"open_incidents": [{"stream_id": sid, "condition": condition, "opened_at": at}
+                                       for sid, condition, at in self.open_incidents()],
+                    "deliveries": counts}
+        except sqlite3.DatabaseError:
+            raise PersistenceError("PERSISTENCE_READ_FAILED") from None
+
+
+def stream_fingerprint(stream: StreamConfig) -> str:
+    """Invalidate stored health when a configured source or detector changes."""
+    return hashlib.sha256(json.dumps(asdict(stream), sort_keys=True).encode()).hexdigest()
 
 
 def _incident_signals(observation: Observation) -> dict[str, str]:
@@ -2625,6 +2680,20 @@ def _exit_code(observations: Sequence[Observation]) -> int:
     return 0
 
 
+def _print_observations(observations: Sequence[Observation], diagnostics: Mapping[str, Any], *, json_mode: bool) -> None:
+    if json_mode:
+        print(json.dumps({"observations": [observation_json(item) for item in observations],
+                          **diagnostics}, sort_keys=True), flush=True)
+        return
+    lines = []
+    for item in observations:
+        reasons = ", ".join(item.reason_codes)
+        lines.append(f"{item.observed_at}  {item.stream_id}: {item.status} | audio={item.audio.status} video={item.video.status} | {reasons}")
+    counts = diagnostics["deliveries"]
+    lines.append(f"Incidents: {len(diagnostics['open_incidents'])} open | Alerts: {counts['pending']} pending, {counts['failed']} failed, {counts['sent']} sent")
+    print("\n".join(lines), flush=True)
+
+
 def doctor(config: AppConfig, *, runner: Callable[..., ChildResult] = run_bounded) -> dict[str, Any]:
     tools: dict[str, Any] = {}
     resolver_flags_ok = False
@@ -2685,6 +2754,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     validate_parser.add_argument("--config", default="dead-air.example.toml")
     doctor_parser = commands.add_parser("doctor", help="check local binary versions and detector filters")
     doctor_parser.add_argument("--config", default=DEFAULT_CONFIG)
+    status_parser = commands.add_parser("status", help="read persisted health without network access or state writes")
+    status_parser.add_argument("--config", default=DEFAULT_CONFIG)
+    status_parser.add_argument("--json", action="store_true")
     check_parser = commands.add_parser("check", help="perform one bounded observation cycle")
     check_parser.add_argument("--config", default=DEFAULT_CONFIG)
     check_parser.add_argument("--json", action="store_true")
@@ -2714,14 +2786,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = doctor(config)
         print(json.dumps(result, sort_keys=True))
         return 0 if result["ok"] else 3
+    if args.command == "status":
+        from dead_air_status import format_status, read_status, status_exit_code
+        try:
+            result = read_status(config)
+        except PersistenceError as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True), flush=True)
+            return 3
+        print(json.dumps(result, sort_keys=True) if args.json else format_status(result), flush=True)
+        return status_exit_code(result)
     if args.command == "check":
         try:
             with IncidentStore(config.watch.state_path, config.retention_days) as store:
                 observations = check_cycle_stateful(config, store)
+                diagnostics = store.diagnostics()
+        except KeyboardInterrupt:
+            return 130
         except PersistenceError as exc:
             print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True), flush=True)
             return 3
-        print(json.dumps({"observations": [observation_json(item) for item in observations]}, sort_keys=True))
+        _print_observations(observations, diagnostics, json_mode=args.json)
         return _exit_code(observations)
     aggregate = 0
     try:
@@ -2729,8 +2813,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             for batch in watch_cycles(
                 config, args.max_cycles, continuous=args.continuous, store=store,
             ):
-                print(json.dumps({"observations": [observation_json(item) for item in batch]},
-                                 sort_keys=True), flush=True)
+                _print_observations(batch, store.diagnostics(), json_mode=args.json)
                 code = _exit_code(batch)
                 if code == 1:
                     aggregate = 1
