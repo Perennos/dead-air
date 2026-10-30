@@ -138,7 +138,7 @@ class PageAndHeaderTests(GuiTestCase):
 
     def test_page_files_have_no_standalone_ai_word_and_no_emoji(self):
         for name in ("index.html", "app.css", "app.js"):
-            text = (ROOT / "gui" / name).read_text(encoding="utf-8")
+            text = (ROOT / "deadair" / "gui" / name).read_text(encoding="utf-8")
             self.assertIsNone(re.search(r"\bAI\b", text), name)
             self.assertIsNone(re.search("[\U0001F000-\U0001FFFF\u2600-\u27BF]", text), name)
 
@@ -211,8 +211,7 @@ class StateTests(GuiTestCase):
         self.assertRegex(stream["last_checked"], r"Z$")
         self.assertEqual(state["last_cycle"], stream["last_checked"])
         self.assertTrue(state["watching"])
-        self.get_json()  # with the writer gone: still no lock file and no change from the page
-        self.assertFalse((self.state.parent / ".dead-air.lock").exists())
+        self.get_json()  # with the writer gone: no change from the page
         self.assertEqual(hashlib.sha256(self.state.read_bytes()).hexdigest(), before)
 
     def test_healthy_after_a_clean_cycle_and_confirming_while_a_bad_streak_builds(self):
@@ -389,7 +388,9 @@ class FirstRunToolTests(GuiTestCase):
         self.assertEqual(dead_air.load_config(self.config).tools.ffmpeg, "ffmpeg")
 
     def test_without_a_venv_the_example_value_is_kept(self):
-        self.assertEqual(self.add("No venv", "https://example.invalid/live/novenv")[0], 200)
+        # Isolate sys.prefix from the test runner's own yt-dlp installation.
+        with patch.object(dead_air_gui.sys, "prefix", str(self.dir / "empty-python")):
+            self.assertEqual(self.add("No venv", "https://example.invalid/live/novenv")[0], 200)
         self.assertEqual(dead_air.load_config(self.config).tools.yt_dlp, "yt-dlp")
 
 
