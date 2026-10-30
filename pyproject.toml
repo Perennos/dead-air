@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "perennos-dead-air"
+version = "0.2.0"
+description = "A local, bounded stream watchdog for off-air, frozen picture, and silence"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{name = "Perennos"}, {name = "Alexander Marzouca"}]
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: OS Independent",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+]
+
+[project.optional-dependencies]
+youtube = ["yt-dlp==2026.8.19"]
+
+[project.scripts]
+dead-air = "deadair.engine:main"
+
+[project.urls]
+Repository = "https://github.com/Perennos/dead-air"
+Issues = "https://github.com/Perennos/dead-air/issues"
+
+[tool.setuptools]
+packages = ["deadair"]
+py-modules = ["dead_air", "dead_air_gui"]
+
+[tool.setuptools.package-data]
+deadair = ["example.toml", "gui/*", "brand/*.svg"]

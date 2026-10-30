@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import errno
 import hmac
+from importlib.resources import files as package_files
 import json
 import os
 import re
@@ -67,7 +68,7 @@ class Server(ThreadingHTTPServer):
 
 
 def watch_argv(config_path: Path) -> list[str]:
-    return [sys.executable, str(HERE / "dead_air.py"), "watch", "--config", str(config_path), "--continuous", "--json"]
+    return [sys.executable, "-m", "deadair", "watch", "--config", str(config_path), "--continuous", "--json"]
 
 
 def _running(server: Server) -> bool:
@@ -244,7 +245,7 @@ def add_stream(config_path: Path, name: Any, url: Any, source: Any) -> tuple[int
         return 400, {"error": "name, url and source must be text"}
     name, url = name.strip(), url.strip()
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:64].strip("-") or "stream-" + secrets.token_hex(3)
-    example = (HERE / "dead-air.example.toml").read_text(encoding="utf-8")
+    example = package_files("deadair").joinpath("example.toml").read_text(encoding="utf-8")
     with _WRITE:
         try:
             if config_path.exists():
@@ -253,7 +254,8 @@ def add_stream(config_path: Path, name: Any, url: Any, source: Any) -> tuple[int
                 current = example[:example.index("[[streams]]")] + example[example.index("# Notifications are disabled"):]
                 streams = ()
                 # The venv's yt-dlp, so the config works without the venv on PATH.
-                tool = next((p for p in (HERE / ".venv" / "Scripts" / "yt-dlp.exe", HERE / ".venv" / "bin" / "yt-dlp")
+                tool = next((p for p in (HERE / ".venv" / "Scripts" / "yt-dlp.exe", HERE / ".venv" / "bin" / "yt-dlp",
+                                         Path(sys.prefix) / "Scripts" / "yt-dlp.exe", Path(sys.prefix) / "bin" / "yt-dlp")
                              if p.exists()), None)
                 if tool:
                     current = current.replace('yt_dlp = "yt-dlp"', f"yt_dlp = {_toml(str(tool))}")
@@ -352,9 +354,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, dict(snapshot(self.server.config_path), watcher=watcher_info(self.server)))
         if path in PAGES:
             filename, content_type = PAGES[path]
-            file = HERE / "gui" / filename
+            file = package_files("deadair").joinpath("gui", filename)
         elif path.startswith("/brand/") and path[len("/brand/"):] in BRAND:
-            file, content_type = HERE / "brand" / path[len("/brand/"):], "image/svg+xml"
+            file, content_type = package_files("deadair").joinpath("brand", path[len("/brand/"):]), "image/svg+xml"
         else:
             return self._json(404, {"error": "not found"})
         try:

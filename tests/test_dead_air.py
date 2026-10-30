@@ -351,8 +351,9 @@ class ProcessAndPolicyTests(unittest.TestCase):
         input_indexes = [i for i, value in enumerate(argv) if value == "-i"]
         self.assertEqual(len(input_indexes), 2)
         for index in input_indexes:
-            self.assertEqual(argv[index - 4:index], [
+            self.assertEqual(argv[index - 6:index], [
                 "-protocol_whitelist", dead_air.INPUT_PROTOCOLS,
+                "-tls_verify", "1",
                 "-rw_timeout", "10000000",
             ])
 
@@ -642,6 +643,7 @@ class ProcessAndPolicyTests(unittest.TestCase):
 
         class ExitedChild:
             returncode = 0
+            pid = 12345
 
             def __init__(self):
                 self.stdout = DelayedPipe(b"progress=end\n")
@@ -652,7 +654,8 @@ class ProcessAndPolicyTests(unittest.TestCase):
                 return self.returncode
 
         child = ExitedChild()
-        with patch.object(dead_air.subprocess, "Popen", return_value=child):
+        with patch.object(dead_air.subprocess, "Popen", return_value=child), \
+                patch.object(dead_air.os, "killpg", create=True):
             result = dead_air.run_bounded([sys.executable, "-c", "pass"], 1, max_output_bytes=256)
         self.assertTrue(result.cleanup_complete)
         self.assertIn("freeze_start", result.stderr)
@@ -815,7 +818,8 @@ class ProcessAndPolicyTests(unittest.TestCase):
                 dead_air.DimensionEvidence("HEALTHY", ("AUDIO_DECODED_NO_EVENT",)),
                 dead_air.DimensionEvidence("HEALTHY", ("VIDEO_DECODED_NO_EVENT",)),
             ),)
-        cycles = list(dead_air.watch_cycles(self.config, 3, cycle=cycle, sleeper=sleeps.append))
+        cycles = list(dead_air.watch_cycles(self.config, 3, cycle=cycle,
+                                           sleeper=sleeps.append, clock=lambda: 100.0))
         self.assertEqual(len(cycles), 3)
         self.assertEqual(len(observed), 3)
         self.assertEqual(sleeps, [self.config.watch.interval_s] * 2)

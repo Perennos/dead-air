@@ -689,7 +689,7 @@ class NativeNetworkIntegrationTests(unittest.TestCase):
                 self.assertTrue(all("SSL_CERT_FILE" in child["environment"] for child in trusted.launches))
                 trusted.assert_reaped(self)
 
-        self.assertFalse(state_path.with_name(".dead-air.lock").exists())
+        self.assertEqual(state_path.with_name(".dead-air.lock").read_bytes(), dead_air.IncidentStore.LEGACY_GUARD)
         with dead_air.IncidentStore(state_path) as reopened:
             self.assertEqual(len(reopened.events()), 4)
             self.assertEqual(len(reopened.deliveries()), 4)
@@ -773,6 +773,21 @@ class NativeNetworkIntegrationTests(unittest.TestCase):
 
         self.assertLessEqual(media.request_count, _MAX_REQUESTS)
         self.assertLessEqual(second.request_count, _MAX_REQUESTS)
+
+    def test_https_media_capture_rejects_an_untrusted_certificate(self):
+        media = self._own_http("media", files=self.fixture_files, tls_context=self._test_tls_context())
+        network = self._base_network(media.port)
+        url = f"https://127.0.0.1:{media.port}/normal/index.m3u8"
+        config, stream = self._direct_stream(url, network)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "capture.mkv"
+            argv = dead_air.build_capture_argv(
+                dead_air.ResolvedMedia((dead_air.MediaInput("muxed", url),)), stream, config, output,
+            )
+            result = dead_air.run_bounded(argv, 3, max_output_bytes=8192)
+        self.assertNotEqual(result.returncode, 0, "FFmpeg accepted an untrusted TLS certificate")
+        self.assertIn("certificate", result.stderr.lower())
+        self.assertTrue(result.cleanup_complete)
 
     def test_c_https_and_smtp_children_stop_at_deadline(self):
         collector = self._own_http("collector", tls_context=self._test_tls_context())

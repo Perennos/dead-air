@@ -3,3 +3,12 @@ __pycache__/
 dead-air.toml
 state/
 .venv/
+build/
+dist/
+*.egg-info/
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3.lock
+*.db
+*.db-journal
+*.db.lock
