@@ -20,6 +20,8 @@
 - SIGTERM cleanup and POSIX descendant cleanup after the direct child exits.
 - Added operator documentation, research-backed next steps, installed-package
   checks and Alexander Marzouca contributor credit.
+- Added the loopback GUI from the public 0.1.0 line, with read-only status,
+  validated stream entry, owned watcher controls, and click-only test alerts.
 
 Upgrade notes: stop existing monitors first, review config-relative paths, keep
 `--json` for machine consumers, and read [state ownership](docs/OPERATIONS.md#state-ownership-and-upgrades)

@@ -9,6 +9,9 @@
 | `deadair/persistence.py` | SQLite transitions, delivery ledger, writer locks |
 | `deadair/status.py` | Read-only snapshots and readable status |
 | `deadair/example.toml` | Starter configuration bundled in the installed package |
+| `dead_air_gui.py` | Loopback dashboard, stream entry, and owned watcher controls |
+| `deadair/gui/` | Dashboard files bundled with the installed package |
+| `deadair/brand/` | Small SVG marks served by the packaged dashboard |
 | `dead_air.py` | Original script/import compatibility entry point |
 | `tests/` | Source, incident, alert, operations, native media and network regressions |
 | `scripts/` | Installed-distribution smoke checks |
@@ -16,6 +19,8 @@
 | `brand/` | Original artwork, fonts, and licenses |
 
 `python -m deadair` and the installed `dead-air` console script call the same CLI.
+The optional dashboard uses the same engine and bundled resources in source and
+installed-package runs; it does not carry a second copy of the monitor logic.
 The compatibility import aliases the actual engine module so existing embedding
 code and test seams still address the functions that execute. Persistence loads
 transition helpers only when recording a cycle; importing it alone must work.

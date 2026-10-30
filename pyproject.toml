@@ -31,7 +31,7 @@ Issues = "https://github.com/Perennos/dead-air/issues"
 
 [tool.setuptools]
 packages = ["deadair"]
-py-modules = ["dead_air"]
+py-modules = ["dead_air", "dead_air_gui"]
 
 [tool.setuptools.package-data]
-deadair = ["example.toml"]
+deadair = ["example.toml", "gui/*", "brand/*.svg"]

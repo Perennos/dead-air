@@ -42,7 +42,35 @@ def main():
             cwd=root, env=environment, capture_output=True, text=True, timeout=10,
         )
         assert imported.returncode == 0 and imported.stdout.strip() == "0.2.0", imported.stderr
-    print("Installed CLI, bundled config, compatibility imports, and read-only status passed.")
+        gui_probe = """
+import http.client
+import threading
+from pathlib import Path
+import dead_air_gui
+
+server = dead_air_gui.make_server(Path('missing.toml'), 0)
+thread = threading.Thread(target=server.serve_forever, daemon=True)
+thread.start()
+try:
+    connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+    connection.request('GET', '/')
+    page = connection.getresponse()
+    assert page.status == 200 and b'__TOKEN__' not in page.read()
+    connection.close()
+    connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=3)
+    connection.request('GET', '/brand/mark.svg')
+    logo = connection.getresponse()
+    assert logo.status == 200 and b'<svg' in logo.read()
+    connection.close()
+finally:
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=3)
+"""
+        gui = subprocess.run([sys.executable, "-c", gui_probe], cwd=root, env=environment,
+                             capture_output=True, text=True, timeout=10)
+        assert gui.returncode == 0, gui.stderr
+    print("Installed CLI, config/status, compatibility imports, and GUI resources passed.")
 
 
 if __name__ == "__main__":

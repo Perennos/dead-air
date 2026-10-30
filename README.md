@@ -27,6 +27,7 @@ The command line offers:
 - **doctor** — inspect local binary versions and detector filters.
 - **check** — perform one bounded observation cycle.
 - **watch** — choose exactly one mode: **--max-cycles N** for a finite run (1–10,000 cycles), or **--continuous** for the authorized foreground 24/7 monitoring path. Both modes run one serial cycle at a time, keep the existing per-cycle and notification bounds, and flush one JSON observation line as each cycle completes. Continuous mode ends on Ctrl+C (exit 130, after owned-child and state cleanup) or a fatal persistence/sender-cleanup failure (exit 3 with a flushed error; sender-cleanup failure is persisted before stopping when the state write succeeds). It does not daemonize or automatically restart.
+- **gui** — serve the local page at 127.0.0.1, show read-only status, add streams, and control only the watcher child it starts.
 
 These commands report observations; they do not control a stream, encoder, or OBS. No live source has been validated by this README.
 
@@ -73,6 +74,12 @@ dead-air check --config dead-air.toml
 `doctor` checks local tools and warns about timing or missing alert destinations;
 a passing result does not prove source health or alert receipt. The example has
 notifications disabled. Configure a destination explicitly if you want alerts.
+
+## Local GUI
+
+Run `dead-air gui --config dead-air.toml` from the environment's script directory, or `python dead_air.py gui --config dead-air.toml` from a checkout. It binds to 127.0.0.1 (port 47824 by default); `--port N`, `--no-browser`, and `--watch` adjust startup. The page validates each new stream with the same config loader, shows persisted status without writing state, and sends a test alert only after that button is pressed. Start and stop control only the watcher child owned by this page. Host and Origin checks and a per-run token protect local actions. Closing the browser tab does not stop a running watcher; use Stop or Quit.
+
+`install.cmd` or `bash install.sh` creates a virtual environment and a local launcher after a dry run (`install.cmd /dry-run` or `bash install.sh --dry-run`). They do not install Python or FFmpeg.
 
 ## Watch and inspect
 

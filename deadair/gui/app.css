@@ -1,0 +1,208 @@
+/* Hallmark · component: local GUI · genre: atmospheric · theme: custom (Día de Muertos remembrance, Dead Air kit) · tokens: var() only · contrast: pass (40-41) */
+/* Hallmark · pre-emit critique: P5 H4 E4 S4 R4 V3 · nav: none · footer: none · states: default, hover, focus-visible, active, disabled, busy, error */
+/* Tokens come from brand/NOTES.md. Derived values, checked against the card surface and the page: --surface, --line,
+   --red-text (signal red 4.8:1 dark, 5.0:1 light), --marigold-text and --mint-text (light theme only), --focus (3.6:1 light). */
+:root {
+  color-scheme: dark;
+  --base: #070707;
+  --text: #F4EFE6;
+  --dim: #95928D;
+  --surface: #151514;
+  --line: #4E4D4A;
+  --red: #E10600;
+  --red-text: #E74C45;
+  --marigold: #F7B32B;
+  --marigold-text: var(--marigold);
+  --focus: var(--marigold);
+  --rosa: #F2A1C0;
+  --lilac: #C7B8EA;
+  --mint: #A8E6CF;
+  --bone: #F4EFE6;
+  --pennant-1: var(--rosa);
+  --pennant-2: var(--lilac);
+  --pennant-3: var(--mint);
+  --pennant-4: var(--marigold);
+  --pennant-5: var(--bone);
+  --ease: cubic-bezier(0.3, 0, 0.1, 1);
+  --mint-text: var(--mint);
+  --font-display: "Bahnschrift", "Avenir Next", "Segoe UI Variable Display", "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.5rem;
+  --space-3xs: 0.25rem;
+  --space-2xs: 0.5rem;
+  --space-xs: 0.75rem;
+  --space-sm: 1rem;
+  --space-md: 1.5rem;
+  --space-lg: 2rem;
+  --radius: 0.25rem;
+  --control: 2.75rem;
+  --gutter: var(--space-sm);
+}
+
+@media (min-width: 40rem) {
+  :root { --gutter: var(--space-md); }
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --base: #F4EFE6;
+    --text: #070707;
+    --dim: #615F5C;
+    --surface: #E8E3DB;
+    --line: #ADA9A3;
+    --red-text: #C00601;
+    --marigold-text: #7F5D19;
+    --focus: #976E1D;
+    --mint-text: #476057;
+    --pennant-5: var(--rosa); /* the kit has four pastels on bone paper */
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; overflow-x: clip; }
+body {
+  min-block-size: 100vh;
+  background: var(--base);
+  color: var(--text);
+  font: 400 var(--text-md) / 1.5 var(--font-display);
+}
+h1, h2, h3, p, ul, dl, dd { margin: 0; }
+time { font-family: var(--font-mono); font-size: var(--text-sm); }
+.sr-only {
+  position: absolute; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* Top band: a string of papel picado pennants, then the controls */
+.band { border-bottom: 1px solid var(--line); }
+.string { display: block; inline-size: 100%; block-size: 3.5rem; }
+.cord { fill: none; stroke: var(--dim); stroke-width: 1; }
+.pn { transform-box: fill-box; transform-origin: 50% 0; animation: sway 6s var(--ease) infinite alternate; }
+.p1 { fill: var(--pennant-1); }
+.p2 { fill: var(--pennant-2); }
+.p3 { fill: var(--pennant-3); }
+.p4 { fill: var(--pennant-4); }
+.p5 { fill: var(--pennant-5); }
+.cut { fill: var(--base); }
+.d1 { animation-delay: -1s; }
+.d2 { animation-delay: -3s; animation-duration: 7s; }
+.d3 { animation-delay: -5s; animation-duration: 5s; }
+@keyframes sway { from { transform: rotate(-2deg); } to { transform: rotate(2deg); } }
+/* An open incident: the pennants stop, go one flat colour, and the string sags */
+.is-alert .pn { animation: none; fill: var(--red); }
+.is-alert .swing { transform: translateY(3px); }
+@media (prefers-reduced-motion: reduce) { .pn { animation: none; } }
+.band-row {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: var(--space-2xs) var(--space-xs);
+  padding-block: var(--space-2xs);
+  padding-inline: max(var(--gutter), calc((100% - 72rem) / 2 + var(--gutter))); /* line up with .page */
+}
+.title {
+  min-width: 0; font-size: var(--text-lg); font-weight: 700; letter-spacing: 0.12em;
+  line-height: 1; overflow-wrap: anywhere;
+}
+.band-stats {
+  order: 3; flex: 1 1 100%; min-width: 0;
+  font: 400 var(--text-sm) / 1.4 var(--font-mono); color: var(--dim);
+}
+.band-actions { display: flex; flex-wrap: wrap; gap: var(--space-2xs); margin-inline-start: auto; }
+@media (min-width: 40rem) {
+  .band-row { column-gap: var(--space-md); }  .band-stats { order: 0; flex: 1 1 0; }
+}
+
+/* Button: default, hover, focus-visible, active, disabled, busy */
+.btn {
+  min-block-size: var(--control); padding: 0 var(--space-xs);
+  font: 600 0.9375rem / 1 var(--font-display);
+  color: var(--base); background: var(--text);
+  border: 1px solid var(--text); border-radius: var(--radius);
+  outline: 2px solid transparent; outline-offset: 2px;
+  white-space: nowrap; cursor: pointer;
+}
+.btn-quiet { color: var(--text); background: transparent; border-color: var(--dim); }
+.btn:hover { background: var(--dim); border-color: var(--dim); }
+.btn-quiet:hover { color: var(--base); }
+.btn:focus-visible { outline-color: var(--focus); }
+.btn:active { color: var(--text); background: var(--surface); border-color: var(--text); }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn[aria-busy="true"]:disabled { cursor: progress; }
+@media (min-width: 40rem) { .btn { padding: 0 var(--space-md); font-size: var(--text-md); } }
+
+/* Page */
+.page {
+  display: grid; gap: var(--space-lg);
+  max-inline-size: 72rem; margin-inline: auto; padding: var(--gutter);
+}
+.note {
+  max-inline-size: 68ch; padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--line); border-radius: var(--radius); overflow-wrap: anywhere;
+}
+.note.is-error { border-color: var(--red); }
+.label { font-size: var(--text-sm); font-weight: 600; color: var(--dim); }
+.section-title { font-size: var(--text-lg); font-weight: 600; line-height: 1.2; }
+.line { max-inline-size: 68ch; color: var(--dim); overflow-wrap: anywhere; }
+.alerts { display: grid; gap: var(--space-2xs); }
+.results { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--space-3xs); max-inline-size: 68ch; }
+.results li { overflow-wrap: anywhere; }
+.results .ok { color: var(--mint-text); font-weight: 600; }
+.results .bad { color: var(--red-text); font-weight: 600; }
+
+/* Stream cards */
+.grid { display: grid; gap: var(--space-sm); grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); }
+.card {
+  display: grid; gap: var(--space-sm); align-content: start; min-width: 0;
+  padding: var(--space-sm);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.card.is-incident { border-color: var(--red); }
+.card-head { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: var(--space-sm); align-items: center; }
+.mark { display: block; inline-size: 4.5rem; block-size: 4.5rem; }
+.mark.is-dim { opacity: 0.6; }
+
+/* Overall status: the calavera, big, next to one line */
+.hero { display: flex; align-items: center; gap: var(--space-md); }
+.hero-mark { flex: none; inline-size: 8rem; block-size: 8rem; }
+.hero-mark.is-dim { opacity: 0.6; }
+.hero-mark.is-dead { filter: drop-shadow(0 0 1.5rem var(--red)); }
+.hero-line { min-width: 0; font-size: var(--text-xl); font-weight: 700; line-height: 1.1; overflow-wrap: anywhere; }
+@media (min-width: 40rem) {
+  .hero-mark { inline-size: 12rem; block-size: 12rem; }
+  .hero-line { font-size: 2.25rem; }
+}
+.card h3 { min-width: 0; font-size: var(--text-lg); font-weight: 600; line-height: 1.2; overflow-wrap: anywhere; }
+.host { font: 400 var(--text-sm) / 1.4 var(--font-mono); color: var(--dim); overflow-wrap: anywhere; }
+.status { font-size: var(--text-xl); font-weight: 700; letter-spacing: 0.06em; line-height: 1.1; overflow-wrap: anywhere; }
+.status.is-ok { color: var(--mint-text); }
+.status.is-incident { color: var(--red-text); }
+.status.is-uncertain { color: var(--marigold-text); }
+.confirm { font-size: var(--text-sm); color: var(--dim); }
+.facts { display: grid; gap: var(--space-xs); }
+.facts dt { font-size: var(--text-sm); color: var(--dim); }
+.facts dd { min-width: 0; overflow-wrap: anywhere; }
+.plain { margin: 0; padding: 0; list-style: none; }
+
+/* Add a stream */
+.add { display: grid; gap: var(--space-2xs); }
+.form { display: grid; gap: var(--space-sm); grid-template-columns: minmax(0, 1fr); align-items: end; margin-block-start: var(--space-xs); }
+@media (min-width: 40rem) {
+  .form { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) minmax(0, 2fr) auto; }
+  .msg { grid-column: 1 / -1; }
+}
+.field { display: grid; gap: var(--space-3xs); min-width: 0; }
+.field label { font-size: var(--text-sm); font-weight: 600; }
+input, select {
+  inline-size: 100%; min-block-size: var(--control); padding: 0 var(--space-xs);
+  font: inherit; color: var(--text); background: var(--base);
+  border: 1px solid var(--dim); border-radius: var(--radius);
+  outline: 2px solid transparent; outline-offset: 1px;
+}
+input:hover, input:active, select:hover, select:active { background: var(--surface); }
+input:focus-visible, select:focus-visible { outline-color: var(--focus); }
+input:disabled, select:disabled { opacity: 0.55; cursor: not-allowed; }
+.msg { min-block-size: 1.5em; min-block-size: 1lh; color: var(--dim); overflow-wrap: anywhere; }
+.msg.is-error { color: var(--red-text); }

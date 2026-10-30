@@ -1962,7 +1962,15 @@ def _main(argv: Sequence[str] | None = None) -> int:
     watch_mode.add_argument("--continuous", action="store_true",
                             help="run in the foreground until interrupted or a fatal error")
     watch_parser.add_argument("--json", action="store_true")
+    gui_parser = commands.add_parser("gui", help="serve the local page on 127.0.0.1")
+    gui_parser.add_argument("--config", default=DEFAULT_CONFIG)
+    gui_parser.add_argument("--port", type=int, default=47824)
+    gui_parser.add_argument("--no-browser", action="store_true")
+    gui_parser.add_argument("--watch", action="store_true", help="also start watching")
     args = parser.parse_args(argv)
+    if args.command == "gui":
+        from dead_air_gui import serve
+        return serve(args.config, args.port, not args.no_browser, args.watch)
     if args.command == "init":
         from importlib.resources import files
         try:
