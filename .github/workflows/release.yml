@@ -1,0 +1,213 @@
+name: Source release
+
+on:
+  pull_request:
+  push:
+    tags:
+      - v0.1.0
+
+permissions:
+  contents: read
+
+jobs:
+  validate-pr:
+    if: github.event_name == 'pull_request'
+    name: Validate v0.1.0 source archives
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Create source archives
+        run: |
+          set -euo pipefail
+          git archive --format=tar --prefix=dead-air-v0.1.0/ HEAD | gzip -n > dead-air-v0.1.0.tar.gz
+          git archive --format=zip --prefix=dead-air-v0.1.0/ --output=dead-air-v0.1.0.zip HEAD
+      - name: Validate archives and checksums
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          import stat
+          import tarfile
+          import zipfile
+
+          prefix = "dead-air-v0.1.0/"
+          required = {
+              prefix + path
+              for path in (
+                  "dead_air.py",
+                  "dead-air.example.toml",
+                  "requirements.txt",
+                  "LICENSE",
+                  "NOTICE",
+                  "README.md",
+                  "brand/licenses/IBMPlexMono-OFL.txt",
+                  "brand/licenses/Unbounded-OFL.txt",
+              )
+          }
+          forbidden = re.compile(
+              r"(^|/)(?:\.git|\.env[^/]*|state|local[-_]?state[^/]*|dead-air\.toml|[^/]+\.local\.toml)(?:/|$)"
+              r"|\.(?:sqlite3?|db|log)(?:[-.][^/]*)?(?:/|$)",
+              re.IGNORECASE,
+          )
+
+          def check_members(label, names):
+              if len(names) != len(set(names)):
+                  raise SystemExit(f"{label}: duplicate archive member")
+              if any(not name.startswith(prefix) for name in names):
+                  raise SystemExit(f"{label}: member outside {prefix}")
+              if any(forbidden.search(name) for name in names):
+                  raise SystemExit(f"{label}: forbidden member name")
+              missing = required.difference(names)
+              if missing:
+                  raise SystemExit(f"{label}: missing required members: {sorted(missing)}")
+
+          def check_version(label, contents):
+              if b'VERSION = "0.1.0"' not in contents.splitlines():
+                  raise SystemExit(f"{label}: expected exact 0.1.0 version marker")
+
+          with tarfile.open("dead-air-v0.1.0.tar.gz", "r:gz") as archive:
+              members = archive.getmembers()
+              check_members("tar.gz", [member.name + "/" if member.isdir() else member.name for member in members])
+              if any(not (member.isfile() or member.isdir()) for member in members):
+                  raise SystemExit("tar.gz: non-file member")
+              source = archive.extractfile(prefix + "dead_air.py")
+              if source is None:
+                  raise SystemExit("tar.gz: missing source file")
+              check_version("tar.gz", source.read())
+              tar_files = {member.name for member in members if member.isfile()}
+
+          with zipfile.ZipFile("dead-air-v0.1.0.zip") as archive:
+              if archive.testzip() is not None:
+                  raise SystemExit("zip: integrity check failed")
+              members = archive.infolist()
+              check_members("zip", [member.filename for member in members])
+              for member in members:
+                  file_type = stat.S_IFMT(member.external_attr >> 16)
+                  if file_type not in (0, stat.S_IFREG, stat.S_IFDIR):
+                      raise SystemExit("zip: non-file member")
+                  if file_type == stat.S_IFDIR and not member.is_dir():
+                      raise SystemExit("zip: invalid directory member")
+              check_version("zip", archive.read(prefix + "dead_air.py"))
+              zip_files = {member.filename for member in members if not member.is_dir()}
+
+          if tar_files != zip_files:
+              raise SystemExit("tar.gz and zip contain different file members")
+          PY
+          sha256sum dead-air-v0.1.0.tar.gz dead-air-v0.1.0.zip > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+
+  draft-release:
+    if: github.event_name == 'push' && github.repository == 'Perennos/dead-air' && github.ref == 'refs/tags/v0.1.0'
+    name: Validate and draft v0.1.0 release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Confirm repository, tag, and current main commit
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Perennos/dead-air"
+          test "$GITHUB_REF" = "refs/tags/v0.1.0"
+          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse refs/remotes/origin/main)"
+      - name: Create source archives
+        run: |
+          set -euo pipefail
+          git archive --format=tar --prefix=dead-air-v0.1.0/ HEAD | gzip -n > dead-air-v0.1.0.tar.gz
+          git archive --format=zip --prefix=dead-air-v0.1.0/ --output=dead-air-v0.1.0.zip HEAD
+      - name: Validate archives and checksums
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          import stat
+          import tarfile
+          import zipfile
+
+          prefix = "dead-air-v0.1.0/"
+          required = {
+              prefix + path
+              for path in (
+                  "dead_air.py",
+                  "dead-air.example.toml",
+                  "requirements.txt",
+                  "LICENSE",
+                  "NOTICE",
+                  "README.md",
+                  "brand/licenses/IBMPlexMono-OFL.txt",
+                  "brand/licenses/Unbounded-OFL.txt",
+              )
+          }
+          forbidden = re.compile(
+              r"(^|/)(?:\.git|\.env[^/]*|state|local[-_]?state[^/]*|dead-air\.toml|[^/]+\.local\.toml)(?:/|$)"
+              r"|\.(?:sqlite3?|db|log)(?:[-.][^/]*)?(?:/|$)",
+              re.IGNORECASE,
+          )
+
+          def check_members(label, names):
+              if len(names) != len(set(names)):
+                  raise SystemExit(f"{label}: duplicate archive member")
+              if any(not name.startswith(prefix) for name in names):
+                  raise SystemExit(f"{label}: member outside {prefix}")
+              if any(forbidden.search(name) for name in names):
+                  raise SystemExit(f"{label}: forbidden member name")
+              missing = required.difference(names)
+              if missing:
+                  raise SystemExit(f"{label}: missing required members: {sorted(missing)}")
+
+          def check_version(label, contents):
+              if b'VERSION = "0.1.0"' not in contents.splitlines():
+                  raise SystemExit(f"{label}: expected exact 0.1.0 version marker")
+
+          with tarfile.open("dead-air-v0.1.0.tar.gz", "r:gz") as archive:
+              members = archive.getmembers()
+              check_members("tar.gz", [member.name + "/" if member.isdir() else member.name for member in members])
+              if any(not (member.isfile() or member.isdir()) for member in members):
+                  raise SystemExit("tar.gz: non-file member")
+              source = archive.extractfile(prefix + "dead_air.py")
+              if source is None:
+                  raise SystemExit("tar.gz: missing source file")
+              check_version("tar.gz", source.read())
+              tar_files = {member.name for member in members if member.isfile()}
+
+          with zipfile.ZipFile("dead-air-v0.1.0.zip") as archive:
+              if archive.testzip() is not None:
+                  raise SystemExit("zip: integrity check failed")
+              members = archive.infolist()
+              check_members("zip", [member.filename for member in members])
+              for member in members:
+                  file_type = stat.S_IFMT(member.external_attr >> 16)
+                  if file_type not in (0, stat.S_IFREG, stat.S_IFDIR):
+                      raise SystemExit("zip: non-file member")
+                  if file_type == stat.S_IFDIR and not member.is_dir():
+                      raise SystemExit("zip: invalid directory member")
+              check_version("zip", archive.read(prefix + "dead_air.py"))
+              zip_files = {member.filename for member in members if not member.is_dir()}
+
+          if tar_files != zip_files:
+              raise SystemExit("tar.gz and zip contain different file members")
+          PY
+          sha256sum dead-air-v0.1.0.tar.gz dead-air-v0.1.0.zip > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create v0.1.0
+          dead-air-v0.1.0.tar.gz
+          dead-air-v0.1.0.zip
+          SHA256SUMS
+          --verify-tag
+          --draft
+          --latest=false
+          --title "Dead Air v0.1.0"
+          --notes "Source archives and SHA-256 checksums for Dead Air v0.1.0. Draft for maintainer inspection."
