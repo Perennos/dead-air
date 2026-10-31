@@ -71,7 +71,8 @@ def read_status(config: dead_air.AppConfig, *, now_wall: float | None = None) ->
     path = Path(config.watch.state_path).absolute()
     states: dict[str, dict[str, Any]] = {}
     incidents: list[dict[str, Any]] = []
-    counts = {"pending": 0, "sent": 0, "failed": 0}
+    counts = {"pending": 0, "sent": 0, "failed": 0,
+              "unacknowledged_failed": 0, "acknowledged_failed": 0}
     destinations: list[dict[str, Any]] = []
     exists = path.exists()
     if path.is_symlink() or path.parent.is_symlink():
@@ -82,7 +83,8 @@ def read_status(config: dead_air.AppConfig, *, now_wall: float | None = None) ->
             connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=1, isolation_level=None)
             connection.execute("PRAGMA query_only=ON")
             connection.execute("BEGIN")
-            if connection.execute("PRAGMA user_version").fetchone()[0] != dead_air.IncidentStore.SCHEMA:
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version not in {1, dead_air.IncidentStore.SCHEMA}:
                 raise dead_air.PersistenceError("STATE_SCHEMA_UNSUPPORTED")
             for stream in config.streams:
                 row = connection.execute("SELECT state_json FROM stream_state WHERE stream_id=?", (stream.id,)).fetchone()
@@ -97,14 +99,30 @@ def read_status(config: dead_air.AppConfig, *, now_wall: float | None = None) ->
                 if re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", sid) and condition in _CONDITIONS:
                     at = opened_at if re.fullmatch(r"[0-9T:.+Z-]{1,40}", opened_at) else None
                     incidents.append({"stream_id": sid, "condition": condition, "opened_at": at})
-            for destination_id, status, count in connection.execute(
-                "SELECT destination_id,status,COUNT(*) FROM deliveries GROUP BY destination_id,status ORDER BY destination_id,status"
-            ):
-                if status not in counts:
+            if version == 1:
+                delivery_rows = connection.execute(
+                    "SELECT destination_id,status,COUNT(*),COUNT(*),0 FROM deliveries "
+                    "GROUP BY destination_id,status ORDER BY destination_id,status"
+                )
+            else:
+                delivery_rows = connection.execute(
+                    "SELECT destination_id,status,COUNT(*),"
+                    "SUM(CASE WHEN acknowledged_at IS NULL THEN 1 ELSE 0 END),"
+                    "SUM(CASE WHEN acknowledged_at IS NOT NULL THEN 1 ELSE 0 END) "
+                    "FROM deliveries GROUP BY destination_id,status ORDER BY destination_id,status"
+                )
+            for destination_id, status, count, unacknowledged, acknowledged in delivery_rows:
+                if status not in {"pending", "sent", "failed"}:
                     raise ValueError
                 counts[status] += count
+                if status == "failed":
+                    counts["unacknowledged_failed"] += unacknowledged
+                    counts["acknowledged_failed"] += acknowledged
                 if re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", destination_id):
-                    destinations.append({"destination_id": destination_id, "status": status, "count": count})
+                    item = {"destination_id": destination_id, "status": status, "count": count}
+                    if status == "failed":
+                        item.update({"unacknowledged": unacknowledged, "acknowledged": acknowledged})
+                    destinations.append(item)
         except (sqlite3.DatabaseError, ValueError, TypeError, OverflowError):
             raise dead_air.PersistenceError("PERSISTENCE_READ_FAILED") from None
         finally:
@@ -113,7 +131,7 @@ def read_status(config: dead_air.AppConfig, *, now_wall: float | None = None) ->
     streams = [_stream_status(stream, states.get(stream.id, {}), when) for stream in config.streams]
     unhealthy = (any(stream["status"] in {"UNHEALTHY", "OFF_AIR"} for stream in streams)
                  or any(item["condition"] not in {"unknown", "degraded"} for item in incidents)
-                 or counts["failed"] > 0)
+                 or counts["unacknowledged_failed"] > 0)
     uncertain = any(stream["status"] in {"UNKNOWN", "DEGRADED"} for stream in streams) or bool(incidents)
     status = "UNHEALTHY" if unhealthy else "UNKNOWN" if uncertain else "HEALTHY"
     return {"ok": status == "HEALTHY", "status": status, "state_available": exists,
@@ -125,6 +143,58 @@ def status_exit_code(result: dict[str, Any]) -> int:
     return {"HEALTHY": 0, "UNHEALTHY": 1}.get(result["status"], 2)
 
 
+def read_failed_deliveries(config: dead_air.AppConfig, *, limit: int = 50,
+                           offset: int = 0) -> list[dict[str, Any]]:
+    """List terminal failures for operators without creating or mutating state."""
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+        raise ValueError("limit must be between 1 and 200")
+    if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= 2**31 - 1:
+        raise ValueError("offset must be a nonnegative bounded integer")
+    path = Path(config.watch.state_path).absolute()
+    if path.is_symlink() or path.parent.is_symlink():
+        raise dead_air.PersistenceError("STATE_PATH_UNSAFE")
+    if not path.exists():
+        return []
+    connection = None
+    try:
+        connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=1, isolation_level=None)
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("BEGIN")
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if version == 1:
+            query = ("SELECT event_id,destination_id,attempts,last_http_status,updated_wall,NULL,NULL "
+                     "FROM deliveries WHERE status='failed' ORDER BY updated_wall DESC,event_id,destination_id LIMIT ? OFFSET ?")
+        elif version == dead_air.IncidentStore.SCHEMA:
+            query = ("SELECT event_id,destination_id,attempts,last_http_status,updated_wall,acknowledged_at,acknowledged_by "
+                     "FROM deliveries WHERE status='failed' ORDER BY updated_wall DESC,event_id,destination_id LIMIT ? OFFSET ?")
+        else:
+            raise dead_air.PersistenceError("STATE_SCHEMA_UNSUPPORTED")
+        rows = connection.execute(query, (limit, offset)).fetchall()
+        result = []
+        for event_id, destination_id, attempts, http_status, updated_wall, acknowledged_at, acknowledged_by in rows:
+            if not (isinstance(event_id, str) and 1 <= len(event_id) <= 64 and event_id.isascii()
+                    and event_id.isalnum() and isinstance(destination_id, str)
+                    and re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", destination_id)):
+                continue
+            result.append({
+                "event_id": event_id,
+                "destination_id": destination_id,
+                "attempts": attempts if isinstance(attempts, int) and 0 <= attempts <= 1000 else None,
+                "last_http_status": http_status if isinstance(http_status, int) and 100 <= http_status <= 599 else None,
+                "updated_wall": updated_wall if isinstance(updated_wall, (int, float)) and math.isfinite(updated_wall) else None,
+                "acknowledged_at": acknowledged_at if isinstance(acknowledged_at, str)
+                and re.fullmatch(r"[0-9T:.+Z-]{1,40}", acknowledged_at) else None,
+                "acknowledged_by": acknowledged_by if isinstance(acknowledged_by, str)
+                and 1 <= len(acknowledged_by) <= 80 and acknowledged_by.isprintable() else None,
+            })
+        return result
+    except (sqlite3.DatabaseError, TypeError, OverflowError):
+        raise dead_air.PersistenceError("PERSISTENCE_READ_FAILED") from None
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 def format_status(result: dict[str, Any]) -> str:
     lines = [f"DEAD AIR  {result['status']}"]
     for stream in result["streams"]:
@@ -134,5 +204,9 @@ def format_status(result: dict[str, Any]) -> str:
     for incident in result["open_incidents"]:
         lines.append(f"  OPEN {incident['stream_id']}: {incident['condition']}")
     counts = result["deliveries"]
-    lines.append(f"Alerts: {counts['pending']} pending, {counts['failed']} failed, {counts['sent']} sent")
+    lines.append(
+        f"Alerts: {counts['pending']} pending, {counts['failed']} failed "
+        f"({counts['unacknowledged_failed']} unacknowledged, {counts['acknowledged_failed']} acknowledged), "
+        f"{counts['sent']} sent"
+    )
     return "\n".join(lines)

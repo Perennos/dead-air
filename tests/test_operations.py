@@ -4,6 +4,7 @@ import dataclasses
 import io
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -142,6 +143,219 @@ class SchedulingOperationsTests(unittest.TestCase):
 
 
 class PersistenceOperationsTests(unittest.TestCase):
+    def test_failed_delivery_acknowledgment_preserves_auditable_history_across_restart(self):
+        from deadair.status import read_failed_deliveries, read_status
+        from test_incidents import config, observation
+        cfg = config()
+        event_id, incident_id = "b" * 32, "a" * 32
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            cfg = dataclasses.replace(cfg, watch=dataclasses.replace(cfg.watch, state_path=str(path)))
+            with dead_air.IncidentStore(path) as store:
+                store.record_cycle(cfg, (observation("HEALTHY", at="1970-01-01T00:01:40Z"),), 100, 0)
+                store._db.execute(
+                    "INSERT INTO incidents VALUES(?,?,?,?,?,?,?,?)",
+                    (incident_id, "sample-channel", "audio_silence", "1970-01-01T00:01:39Z", 99,
+                     "1970-01-01T00:01:41Z", 101, "resolved"),
+                )
+                store._db.execute(
+                    "INSERT INTO events VALUES(?,?,?,?,?,?,?)",
+                    (event_id, incident_id, "sample-channel", "audio_silence", "open", 99, "{}"),
+                )
+                store._db.execute(
+                    "INSERT INTO deliveries(event_id,destination_id,status,attempts,created_wall,next_attempt_wall,last_error,last_http_status,updated_wall) "
+                    "VALUES(?,?,'failed',3,99,NULL,'HTTP_STATUS',503,99)",
+                    (event_id, "ops"),
+                )
+                before = read_status(cfg, now_wall=150)
+                self.assertEqual(before["open_incidents"], [])
+                self.assertEqual(before["deliveries"]["unacknowledged_failed"], 1)
+                self.assertEqual(before["deliveries"]["acknowledged_failed"], 0)
+                self.assertEqual(before["status"], "UNHEALTHY")
+                self.assertEqual(read_failed_deliveries(cfg)[0]["event_id"], event_id)
+
+                result = store.acknowledge_failed_delivery(
+                    event_id, "ops", "Alex Marzouca", "1970-01-01T00:03:20Z", 200,
+                )
+                self.assertEqual(result, "acknowledged")
+                row = store.deliveries()[0]
+                self.assertEqual((row[2], row[3], row[4], row[5]), ("failed", 3, "HTTP_STATUS", 503))
+                after = read_status(cfg, now_wall=200)
+                self.assertEqual(after["deliveries"]["failed"], 1)
+                self.assertEqual(after["deliveries"]["unacknowledged_failed"], 0)
+                self.assertEqual(after["deliveries"]["acknowledged_failed"], 1)
+                self.assertEqual(after["status"], "HEALTHY")
+
+            with dead_air.IncidentStore(path) as reopened:
+                self.assertEqual(reopened.acknowledge_failed_delivery(
+                    event_id, "ops", "Another operator", "1970-01-01T00:03:21Z", 201,
+                ), "already_acknowledged")
+                failure = read_failed_deliveries(cfg)[0]
+                self.assertEqual((failure["acknowledged_by"], failure["acknowledged_at"]),
+                                 ("Alex Marzouca", "1970-01-01T00:03:20Z"))
+                self.assertEqual(read_status(cfg, now_wall=201)["status"], "HEALTHY")
+
+    def test_pending_delivery_cannot_be_acknowledged_or_pruned(self):
+        event_id, incident_id = "d" * 32, "c" * 32
+        with tempfile.TemporaryDirectory() as directory, dead_air.IncidentStore(
+                Path(directory) / "state.db", retention_days=1) as store:
+            store._db.execute(
+                "INSERT INTO incidents VALUES(?,?,?,?,?,?,?,?)",
+                (incident_id, "sample-channel", "audio_silence", "1970-01-01T00:01:39Z", 99,
+                 "1970-01-01T00:01:41Z", 101, "resolved"),
+            )
+            store._db.execute(
+                "INSERT INTO events VALUES(?,?,?,?,?,?,?)",
+                (event_id, incident_id, "sample-channel", "audio_silence", "open", 99, "{}"),
+            )
+            store._db.execute(
+                "INSERT INTO deliveries(event_id,destination_id,status,attempts,created_wall,next_attempt_wall,last_error,last_http_status,updated_wall) "
+                "VALUES(?,?,'pending',1,99,100,'HTTP_STATUS',503,99)",
+                (event_id, "ops"),
+            )
+            self.assertEqual(store.acknowledge_failed_delivery(
+                event_id, "ops", "Alex", "1970-01-01T00:03:20Z", 200,
+            ), "not_failed")
+            store._prune(200000)
+            self.assertEqual(store._db.execute("SELECT COUNT(*) FROM events WHERE event_id=?", (event_id,)).fetchone()[0], 1)
+            self.assertIsNone(store._db.execute(
+                "SELECT acknowledged_at FROM deliveries WHERE event_id=?", (event_id,),
+            ).fetchone()[0])
+
+    def test_acknowledged_failure_is_preserved_until_configured_retention(self):
+        with tempfile.TemporaryDirectory() as directory, dead_air.IncidentStore(
+                Path(directory) / "state.db", retention_days=1) as store:
+            incident_id, event_id = "j" * 32, "k" * 32
+            store._db.execute(
+                "INSERT INTO incidents VALUES(?,?,?,?,?,?,?,?)",
+                (incident_id, "sample-channel", "audio_silence", "1970-01-01T00:01:39Z", 99,
+                 "1970-01-01T00:01:41Z", 101, "resolved"),
+            )
+            store._db.execute(
+                "INSERT INTO events VALUES(?,?,?,?,?,?,?)",
+                (event_id, incident_id, "sample-channel", "audio_silence", "open", 99, "{}"),
+            )
+            store._db.execute(
+                "INSERT INTO deliveries(event_id,destination_id,status,attempts,created_wall,next_attempt_wall,last_error,last_http_status,updated_wall) "
+                "VALUES(?,?,'failed',3,99,NULL,'HTTP_STATUS',503,99)",
+                (event_id, "ops"),
+            )
+            store._prune(200000)
+            self.assertEqual(store._db.execute("SELECT COUNT(*) FROM events WHERE event_id=?", (event_id,)).fetchone()[0], 1)
+            ack_at = datetime.fromtimestamp(200000, timezone.utc).isoformat().replace("+00:00", "Z")
+            self.assertEqual(store.acknowledge_failed_delivery(event_id, "ops", "Alex", ack_at, 200000),
+                             "acknowledged")
+            self.assertEqual(store._db.execute("SELECT status FROM deliveries WHERE event_id=?", (event_id,)).fetchone()[0],
+                             "failed")
+            store._prune(200000)
+            self.assertEqual(store._db.execute("SELECT COUNT(*) FROM events WHERE event_id=?", (event_id,)).fetchone()[0], 0)
+
+    def test_schema_one_status_is_read_only_then_writer_migrates_without_losing_failures(self):
+        from deadair.status import read_failed_deliveries, read_status
+        from test_incidents import config
+        cfg = config()
+        event_id, incident_id = "f" * 32, "e" * 32
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy.db"
+            connection = sqlite3.connect(path)
+            connection.executescript("""
+                CREATE TABLE stream_state(stream_id TEXT PRIMARY KEY,state_json TEXT NOT NULL);
+                CREATE TABLE incidents(
+                    incident_id TEXT PRIMARY KEY,stream_id TEXT NOT NULL,condition TEXT NOT NULL,
+                    opened_at TEXT NOT NULL,opened_wall REAL NOT NULL,closed_at TEXT,closed_wall REAL,status TEXT NOT NULL
+                );
+                CREATE TABLE events(
+                    event_id TEXT PRIMARY KEY,incident_id TEXT NOT NULL,stream_id TEXT NOT NULL,condition TEXT NOT NULL,
+                    transition TEXT NOT NULL,created_wall REAL NOT NULL,payload_json TEXT NOT NULL
+                );
+                CREATE TABLE deliveries(
+                    event_id TEXT NOT NULL,destination_id TEXT NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL,
+                    created_wall REAL NOT NULL,next_attempt_wall REAL,last_error TEXT,last_http_status INTEGER,
+                    updated_wall REAL NOT NULL,PRIMARY KEY(event_id,destination_id)
+                );
+                PRAGMA user_version=1;
+            """)
+            connection.execute("INSERT INTO incidents VALUES(?,?,?,?,?,?,?,?)",
+                               (incident_id, "sample-channel", "audio_silence", "1970-01-01T00:01:39Z", 99,
+                                "1970-01-01T00:01:41Z", 101, "resolved"))
+            connection.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?)",
+                               (event_id, incident_id, "sample-channel", "audio_silence", "open", 99, "{}"))
+            connection.execute("INSERT INTO deliveries VALUES(?,?,'failed',3,99,NULL,'HTTP_STATUS',503,99)",
+                               (event_id, "ops"))
+            connection.commit()
+            connection.close()
+            cfg = dataclasses.replace(cfg, watch=dataclasses.replace(cfg.watch, state_path=str(path)))
+
+            snapshot = read_status(cfg, now_wall=150)
+            self.assertEqual(snapshot["deliveries"]["unacknowledged_failed"], 1)
+            self.assertEqual(read_failed_deliveries(cfg)[0]["acknowledged_by"], None)
+            connection = sqlite3.connect(path)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertNotIn("acknowledged_at", {row[1] for row in connection.execute("PRAGMA table_info(deliveries)")})
+            connection.close()
+
+            with dead_air.IncidentStore(path) as store:
+                self.assertEqual(store._db.execute("PRAGMA user_version").fetchone()[0], 2)
+                self.assertEqual(store.deliveries()[0][2], "failed")
+                self.assertEqual(store.acknowledge_failed_delivery(
+                    event_id, "ops", "Alex", "1970-01-01T00:03:20Z", 200,
+                ), "acknowledged")
+            self.assertEqual(read_failed_deliveries(cfg)[0]["acknowledged_by"], "Alex")
+
+    def test_ack_delivery_cli_reports_failure_ids_and_does_not_contact_network(self):
+        from test_incidents import config
+        cfg = config()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            cfg = dataclasses.replace(cfg, watch=dataclasses.replace(cfg.watch, state_path=str(path)))
+            event_id, incident_id = "h" * 32, "g" * 32
+            with dead_air.IncidentStore(path) as store:
+                store._db.execute("INSERT INTO incidents VALUES(?,?,?,?,?,?,?,?)",
+                                  (incident_id, "sample-channel", "audio_silence", "x", 1, "y", 2, "resolved"))
+                store._db.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?)",
+                                  (event_id, incident_id, "sample-channel", "audio_silence", "open", 1, "{}"))
+                store._db.execute(
+                    "INSERT INTO deliveries(event_id,destination_id,status,attempts,created_wall,next_attempt_wall,last_error,last_http_status,updated_wall) "
+                    "VALUES(?,?,'failed',3,1,NULL,'HTTP_STATUS',503,1)", (event_id, "ops"),
+                )
+            output = io.StringIO()
+            with patch.object(dead_air, "load_config", return_value=cfg), patch("sys.stdout", output):
+                self.assertEqual(dead_air.main(["failures"]), 0)
+                listed = json.loads(output.getvalue())
+                self.assertEqual(listed["failures"][0]["event_id"], event_id)
+            output = io.StringIO()
+            with patch.object(dead_air, "load_config", return_value=cfg), patch("sys.stdout", output):
+                self.assertEqual(dead_air.main([
+                    "ack-delivery", "--event-id", event_id, "--destination-id", "ops", "--operator", "Alex",
+                ]), 0)
+            self.assertEqual(json.loads(output.getvalue())["result"], "acknowledged")
+
+    def test_ack_delivery_reports_the_live_writer_lock_without_touching_state(self):
+        from test_incidents import config
+        cfg = config()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            cfg = dataclasses.replace(cfg, watch=dataclasses.replace(cfg.watch, state_path=str(path)))
+            with dead_air.IncidentStore(path) as store:
+                event_id, incident_id = "m" * 32, "l" * 32
+                store._db.execute("INSERT INTO incidents VALUES(?,?,?,?,?,?,?,?)",
+                                  (incident_id, "sample-channel", "audio_silence", "x", 1, "y", 2, "resolved"))
+                store._db.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?)",
+                                  (event_id, incident_id, "sample-channel", "audio_silence", "open", 1, "{}"))
+                store._db.execute(
+                    "INSERT INTO deliveries(event_id,destination_id,status,attempts,created_wall,next_attempt_wall,last_error,last_http_status,updated_wall) "
+                    "VALUES(?,?,'failed',3,1,NULL,'HTTP_STATUS',503,1)", (event_id, "ops"),
+                )
+                output = io.StringIO()
+                with patch.object(dead_air, "load_config", return_value=cfg), patch("sys.stdout", output):
+                    self.assertEqual(dead_air.main([
+                        "ack-delivery", "--event-id", event_id, "--destination-id", "ops", "--operator", "Alex",
+                    ]), 3)
+                self.assertEqual(json.loads(output.getvalue())["error"], "STATE_LOCKED")
+                self.assertIsNone(store._db.execute(
+                    "SELECT acknowledged_at FROM deliveries WHERE event_id=?", (event_id,),
+                ).fetchone()[0])
+
     def test_failed_guard_publication_leaves_no_partial_lock_and_can_retry(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
