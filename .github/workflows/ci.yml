@@ -73,6 +73,7 @@ jobs:
         run: |
           ffmpeg -version
           ffprobe -version
+          openssl version
       - name: Install pinned requirements from official PyPI
         run: python -m pip install --disable-pip-version-check --index-url https://pypi.org/simple -r requirements.txt
       - name: Run full test discovery with synthetic media
