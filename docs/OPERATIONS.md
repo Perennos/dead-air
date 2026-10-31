@@ -61,8 +61,13 @@ removes that historical delivery failure from current health, while any open
 incident or unhealthy stream still keeps its own health result. Acknowledged
 failed deliveries remain available through the configured retention period and
 can then be pruned with their resolved incident history.
-The watch process holds the writer lock; stop it before acknowledging a failure,
-then restart it. Status and failure listing remain available while watch is active.
+Schema-2 acknowledgments use a short SQLite transaction that touches only
+delivery metadata, so they can run while a schema-2 watch process is active.
+If another SQLite write remains active beyond the bounded wait, acknowledgment
+returns an error and may be retried after the writer finishes.
+Schema-1 acknowledgment uses the normal exclusive migration path; stop an older
+watch process before retrying a migration that was blocked by it. Status and
+failure listing remain available while watch is active.
 
 Each latest observation keeps its original observation timestamp. A sample older
 than that stream's `max_gap_s`, a clock rollback, or changed source/detector

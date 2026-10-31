@@ -8,6 +8,8 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import tomllib
 import unittest
 from pathlib import Path
@@ -294,12 +296,15 @@ class PersistenceOperationsTests(unittest.TestCase):
             self.assertNotIn("acknowledged_at", {row[1] for row in connection.execute("PRAGMA table_info(deliveries)")})
             connection.close()
 
-            with dead_air.IncidentStore(path) as store:
-                self.assertEqual(store._db.execute("PRAGMA user_version").fetchone()[0], 2)
-                self.assertEqual(store.deliveries()[0][2], "failed")
-                self.assertEqual(store.acknowledge_failed_delivery(
-                    event_id, "ops", "Alex", "1970-01-01T00:03:20Z", 200,
-                ), "acknowledged")
+            self.assertEqual(dead_air.acknowledge_failed_delivery(
+                path, event_id, "ops", "Alex", "1970-01-01T00:03:20Z", 200,
+            ), "acknowledged")
+            connection = sqlite3.connect(path)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(connection.execute(
+                "SELECT status,acknowledged_by FROM deliveries WHERE event_id=?", (event_id,),
+            ).fetchone(), ("failed", "Alex"))
+            connection.close()
             self.assertEqual(read_failed_deliveries(cfg)[0]["acknowledged_by"], "Alex")
 
     def test_ack_delivery_cli_reports_failure_ids_and_does_not_contact_network(self):
@@ -330,13 +335,17 @@ class PersistenceOperationsTests(unittest.TestCase):
                 ]), 0)
             self.assertEqual(json.loads(output.getvalue())["result"], "acknowledged")
 
-    def test_ack_delivery_reports_the_live_writer_lock_without_touching_state(self):
-        from test_incidents import config
-        cfg = config()
+    def test_ack_delivery_works_during_watch_without_resetting_stream_counters(self):
+        from test_incidents import config, observation, silence
+        cfg = config(min_bad=2, unhealthy=0)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.db"
             cfg = dataclasses.replace(cfg, watch=dataclasses.replace(cfg.watch, state_path=str(path)))
             with dead_air.IncidentStore(path) as store:
+                store.record_cycle(cfg, (observation(audio=silence(), reasons=("AUDIO_SILENCE",)),), 100, 0)
+                state_before = store._db.execute(
+                    "SELECT state_json FROM stream_state WHERE stream_id='sample-channel'",
+                ).fetchone()[0]
                 event_id, incident_id = "m" * 32, "l" * 32
                 store._db.execute("INSERT INTO incidents VALUES(?,?,?,?,?,?,?,?)",
                                   (incident_id, "sample-channel", "audio_silence", "x", 1, "y", 2, "resolved"))
@@ -350,11 +359,74 @@ class PersistenceOperationsTests(unittest.TestCase):
                 with patch.object(dead_air, "load_config", return_value=cfg), patch("sys.stdout", output):
                     self.assertEqual(dead_air.main([
                         "ack-delivery", "--event-id", event_id, "--destination-id", "ops", "--operator", "Alex",
-                    ]), 3)
-                self.assertEqual(json.loads(output.getvalue())["error"], "STATE_LOCKED")
-                self.assertIsNone(store._db.execute(
+                    ]), 0)
+                self.assertEqual(json.loads(output.getvalue())["result"], "acknowledged")
+                self.assertEqual(store._db.execute(
+                    "SELECT state_json FROM stream_state WHERE stream_id='sample-channel'",
+                ).fetchone()[0], state_before)
+                self.assertIsNotNone(store._db.execute(
                     "SELECT acknowledged_at FROM deliveries WHERE event_id=?", (event_id,),
                 ).fetchone()[0])
+
+    def test_ack_delivery_waits_for_a_concurrent_sqlite_writer(self):
+        from test_incidents import config
+        cfg = config()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.db"
+            cfg = dataclasses.replace(cfg, watch=dataclasses.replace(cfg.watch, state_path=str(path)))
+            event_id, incident_id = "w" * 32, "x" * 32
+            with dead_air.IncidentStore(path) as store:
+                store._db.execute("INSERT INTO incidents VALUES(?,?,?,?,?,?,?,?)",
+                                  (incident_id, "sample-channel", "audio_silence", "x", 1, "y", 2, "resolved"))
+                store._db.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?)",
+                                  (event_id, incident_id, "sample-channel", "audio_silence", "open", 1, "{}"))
+                store._db.execute(
+                    "INSERT INTO deliveries(event_id,destination_id,status,attempts,created_wall,next_attempt_wall,last_error,last_http_status,updated_wall) "
+                    "VALUES(?,?,'failed',3,1,NULL,'HTTP_STATUS',503,1)", (event_id, "ops"),
+                )
+                lock_held = threading.Event()
+                writer_errors = []
+
+                def short_writer():
+                    connection = sqlite3.connect(path, timeout=2, isolation_level=None)
+                    try:
+                        connection.execute("BEGIN IMMEDIATE")
+                        lock_held.set()
+                        time.sleep(0.1)
+                        connection.execute("COMMIT")
+                    except Exception as exc:
+                        writer_errors.append(exc)
+                    finally:
+                        connection.close()
+
+                writer = threading.Thread(target=short_writer)
+                writer.start()
+                self.assertTrue(lock_held.wait(timeout=2), "concurrent writer did not acquire SQLite lock")
+                result = dead_air.acknowledge_failed_delivery(
+                    path, event_id, "ops", "Alex", "1970-01-01T00:03:20Z", 200,
+                )
+                writer.join(timeout=2)
+                self.assertFalse(writer.is_alive(), "concurrent writer did not finish")
+                self.assertEqual(writer_errors, [])
+                self.assertEqual(result, "acknowledged")
+                self.assertEqual(store._db.execute(
+                    "SELECT acknowledged_by FROM deliveries WHERE event_id=?", (event_id,),
+                ).fetchone()[0], "Alex")
+
+    def test_ack_delivery_does_not_create_missing_state_or_accept_an_empty_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing.db"
+            self.assertEqual(dead_air.acknowledge_failed_delivery(
+                missing, "v" * 32, "ops", "Alex", "1970-01-01T00:03:20Z", 200,
+            ), "not_found")
+            self.assertFalse(missing.exists())
+            empty = Path(directory) / "empty.db"
+            empty.touch()
+            with self.assertRaisesRegex(dead_air.PersistenceError, "STATE_CORRUPT"):
+                dead_air.acknowledge_failed_delivery(
+                    empty, "v" * 32, "ops", "Alex", "1970-01-01T00:03:20Z", 200,
+                )
+            self.assertEqual(empty.stat().st_size, 0)
 
     def test_failed_guard_publication_leaves_no_partial_lock_and_can_retry(self):
         with tempfile.TemporaryDirectory() as directory:

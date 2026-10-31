@@ -1438,7 +1438,7 @@ def _transition_evidence(condition: str, observation: Observation, *,
     }
 
 
-from .persistence import IncidentStore
+from .persistence import IncidentStore, acknowledge_failed_delivery
 
 
 def stream_fingerprint(stream: StreamConfig) -> str:
@@ -2031,10 +2031,10 @@ def _main(argv: Sequence[str] | None = None) -> int:
     if args.command == "ack-delivery":
         acknowledged_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         try:
-            with IncidentStore(config.watch.state_path, config.retention_days) as store:
-                result = store.acknowledge_failed_delivery(
-                    args.event_id, args.destination_id, args.operator, acknowledged_at, time.time(),
-                )
+            result = acknowledge_failed_delivery(
+                config.watch.state_path, args.event_id, args.destination_id,
+                args.operator, acknowledged_at, time.time(), config.retention_days,
+            )
         except (PersistenceError, ValueError) as exc:
             print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True), flush=True)
             return 3

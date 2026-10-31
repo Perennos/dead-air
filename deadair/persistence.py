@@ -11,6 +11,64 @@ from datetime import datetime
 from typing import Any, Mapping, Sequence
 from .models import AppConfig, DestinationConfig, Observation, PersistenceError, StreamConfig
 
+
+def _acknowledge_failed_delivery(db: sqlite3.Connection, event_id: str, destination_id: str,
+                                operator: str, acknowledged_at: str, now_wall: float) -> str:
+    if (not isinstance(event_id, str) or not event_id or len(event_id) > 64
+            or not event_id.isascii() or not event_id.isalnum()):
+        raise ValueError("event_id must be a bounded ASCII identifier")
+    if (not isinstance(destination_id, str) or not destination_id
+            or len(destination_id) > 64
+            or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for char in destination_id)):
+        raise ValueError("destination_id must be a bounded lowercase identifier")
+    if (not isinstance(operator, str) or not operator.strip()
+            or len(operator) > 80 or not operator.isprintable()):
+        raise ValueError("operator must be a printable label of 1 to 80 characters")
+    if not isinstance(acknowledged_at, str) or len(acknowledged_at) > 40:
+        raise ValueError("acknowledged_at must be an ISO timestamp")
+    try:
+        parsed_at = datetime.fromisoformat(acknowledged_at.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("acknowledged_at must be an ISO timestamp") from None
+    try:
+        finite_now = (isinstance(now_wall, (int, float)) and not isinstance(now_wall, bool)
+                      and math.isfinite(now_wall))
+    except OverflowError:
+        finite_now = False
+    if parsed_at.tzinfo is None or not finite_now:
+        raise ValueError("acknowledgment time must include a timezone and finite epoch")
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT status,acknowledged_at FROM deliveries WHERE event_id=? AND destination_id=?",
+            (event_id, destination_id),
+        ).fetchone()
+        if row is None:
+            db.execute("COMMIT")
+            return "not_found"
+        if row[0] != "failed":
+            db.execute("COMMIT")
+            return "not_failed"
+        if row[1] is not None:
+            db.execute("COMMIT")
+            return "already_acknowledged"
+        db.execute(
+            "UPDATE deliveries SET acknowledged_at=?,acknowledged_wall=?,acknowledged_by=? "
+            "WHERE event_id=? AND destination_id=? AND status='failed' AND acknowledged_at IS NULL",
+            (acknowledged_at, now_wall, operator.strip(), event_id, destination_id),
+        )
+        if db.execute("SELECT changes()").fetchone()[0] != 1:
+            raise sqlite3.DatabaseError("delivery changed during acknowledgment")
+        db.execute("COMMIT")
+        return "acknowledged"
+    except sqlite3.DatabaseError:
+        try:
+            db.execute("ROLLBACK")
+        except sqlite3.DatabaseError:
+            pass
+        raise PersistenceError("PERSISTENCE_WRITE_FAILED") from None
+
+
 class IncidentStore:
     SCHEMA = 2
     LEGACY_GUARD = b"DEAD_AIR_OS_LOCK_V2\n"
@@ -403,59 +461,9 @@ class IncidentStore:
                                     now_wall: float) -> str:
         """Record who acknowledged a terminal failure while retaining its delivery row."""
         assert self._db is not None
-        if (not isinstance(event_id, str) or not event_id or len(event_id) > 64
-                or not event_id.isascii() or not event_id.isalnum()):
-            raise ValueError("event_id must be a bounded ASCII identifier")
-        if (not isinstance(destination_id, str) or not destination_id
-                or len(destination_id) > 64
-                or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for char in destination_id)):
-            raise ValueError("destination_id must be a bounded lowercase identifier")
-        if (not isinstance(operator, str) or not operator.strip()
-                or len(operator) > 80 or not operator.isprintable()):
-            raise ValueError("operator must be a printable label of 1 to 80 characters")
-        if not isinstance(acknowledged_at, str) or len(acknowledged_at) > 40:
-            raise ValueError("acknowledged_at must be an ISO timestamp")
-        try:
-            parsed_at = datetime.fromisoformat(acknowledged_at.replace("Z", "+00:00"))
-        except ValueError:
-            raise ValueError("acknowledged_at must be an ISO timestamp") from None
-        try:
-            finite_now = (isinstance(now_wall, (int, float)) and not isinstance(now_wall, bool)
-                          and math.isfinite(now_wall))
-        except OverflowError:
-            finite_now = False
-        if parsed_at.tzinfo is None or not finite_now:
-            raise ValueError("acknowledgment time must include a timezone and finite epoch")
-        try:
-            self._db.execute("BEGIN IMMEDIATE")
-            row = self._db.execute(
-                "SELECT status,acknowledged_at FROM deliveries WHERE event_id=? AND destination_id=?",
-                (event_id, destination_id),
-            ).fetchone()
-            if row is None:
-                self._db.execute("COMMIT")
-                return "not_found"
-            if row[0] != "failed":
-                self._db.execute("COMMIT")
-                return "not_failed"
-            if row[1] is not None:
-                self._db.execute("COMMIT")
-                return "already_acknowledged"
-            self._db.execute(
-                "UPDATE deliveries SET acknowledged_at=?,acknowledged_wall=?,acknowledged_by=? "
-                "WHERE event_id=? AND destination_id=? AND status='failed' AND acknowledged_at IS NULL",
-                (acknowledged_at, now_wall, operator.strip(), event_id, destination_id),
-            )
-            if self._db.execute("SELECT changes()").fetchone()[0] != 1:
-                raise sqlite3.DatabaseError("delivery changed during acknowledgment")
-            self._db.execute("COMMIT")
-            return "acknowledged"
-        except sqlite3.DatabaseError:
-            try:
-                self._db.execute("ROLLBACK")
-            except sqlite3.DatabaseError:
-                pass
-            raise PersistenceError("PERSISTENCE_WRITE_FAILED") from None
+        return _acknowledge_failed_delivery(
+            self._db, event_id, destination_id, operator, acknowledged_at, now_wall,
+        )
 
     def open_incidents(self) -> list[tuple[Any, ...]]:
         assert self._db is not None
@@ -479,5 +487,51 @@ class IncidentStore:
                     "deliveries": counts}
         except sqlite3.DatabaseError:
             raise PersistenceError("PERSISTENCE_READ_FAILED") from None
+
+
+def acknowledge_failed_delivery(path: str | os.PathLike[str], event_id: str,
+                                destination_id: str, operator: str,
+                                acknowledged_at: str, now_wall: float,
+                                retention_days: int = 90) -> str:
+    """Acknowledge one terminal failure without resetting a running watcher's counters."""
+    state_path = Path(path).absolute()
+    if state_path.is_symlink() or state_path.parent.is_symlink():
+        raise PersistenceError("STATE_PATH_UNSAFE")
+    try:
+        state_size = state_path.stat().st_size
+    except FileNotFoundError:
+        return "not_found"
+    except OSError:
+        raise PersistenceError("STATE_UNAVAILABLE") from None
+    if state_size == 0:
+        raise PersistenceError("STATE_CORRUPT")
+    connection = None
+    try:
+        connection = sqlite3.connect(
+            state_path.as_uri() + "?mode=rw", uri=True, timeout=5, isolation_level=None,
+        )
+        connection.execute("PRAGMA busy_timeout=5000")
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if version == 1:
+            connection.close()
+            connection = None
+            # An old active writer cannot safely see the new columns. The normal
+            # writer lock makes migration wait until it stops before upgrading.
+            with IncidentStore(state_path, retention_days) as store:
+                return store.acknowledge_failed_delivery(
+                    event_id, destination_id, operator, acknowledged_at, now_wall,
+                )
+        if version != IncidentStore.SCHEMA:
+            raise PersistenceError("STATE_SCHEMA_UNSUPPORTED")
+        # Schema-2 watch cycles remain the sole owner of stream and incident state.
+        # SQLite serializes this bounded acknowledgment update with those cycles.
+        return _acknowledge_failed_delivery(
+            connection, event_id, destination_id, operator, acknowledged_at, now_wall,
+        )
+    except sqlite3.DatabaseError:
+        raise PersistenceError("PERSISTENCE_READ_FAILED") from None
+    finally:
+        if connection is not None:
+            connection.close()
 
 
