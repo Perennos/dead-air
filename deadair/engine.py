@@ -1438,7 +1438,7 @@ def _transition_evidence(condition: str, observation: Observation, *,
     }
 
 
-from .persistence import IncidentStore
+from .persistence import IncidentStore, acknowledge_failed_delivery
 
 
 def stream_fingerprint(stream: StreamConfig) -> str:
@@ -1952,6 +1952,15 @@ def _main(argv: Sequence[str] | None = None) -> int:
     status_parser = commands.add_parser("status", help="read persisted health without network access or state writes")
     status_parser.add_argument("--config", default=DEFAULT_CONFIG)
     status_parser.add_argument("--json", action="store_true")
+    failures_parser = commands.add_parser("failures", help="list terminal notification failures without network access")
+    failures_parser.add_argument("--config", default=DEFAULT_CONFIG)
+    failures_parser.add_argument("--limit", type=int, default=50)
+    failures_parser.add_argument("--offset", type=int, default=0)
+    ack_parser = commands.add_parser("ack-delivery", help="acknowledge one terminal failed notification")
+    ack_parser.add_argument("--config", default=DEFAULT_CONFIG)
+    ack_parser.add_argument("--event-id", required=True)
+    ack_parser.add_argument("--destination-id", required=True)
+    ack_parser.add_argument("--operator", required=True)
     check_parser = commands.add_parser("check", help="perform one bounded observation cycle")
     check_parser.add_argument("--config", default=DEFAULT_CONFIG)
     check_parser.add_argument("--json", action="store_true")
@@ -2010,6 +2019,29 @@ def _main(argv: Sequence[str] | None = None) -> int:
             return 3
         print(json.dumps(result, sort_keys=True) if args.json else format_status(result), flush=True)
         return status_exit_code(result)
+    if args.command == "failures":
+        from .status import read_failed_deliveries
+        try:
+            failures = read_failed_deliveries(config, limit=args.limit, offset=args.offset)
+        except (PersistenceError, ValueError) as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True), flush=True)
+            return 3
+        print(json.dumps({"ok": True, "failures": failures, "limit": args.limit, "offset": args.offset}, sort_keys=True), flush=True)
+        return 0
+    if args.command == "ack-delivery":
+        acknowledged_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        try:
+            result = acknowledge_failed_delivery(
+                config.watch.state_path, args.event_id, args.destination_id,
+                args.operator, acknowledged_at, time.time(), config.retention_days,
+            )
+        except (PersistenceError, ValueError) as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True), flush=True)
+            return 3
+        ok = result in {"acknowledged", "already_acknowledged"}
+        print(json.dumps({"ok": ok, "result": result, "event_id": args.event_id,
+                          "destination_id": args.destination_id}, sort_keys=True), flush=True)
+        return 0 if ok else 1
     if args.command == "check":
         try:
             with IncidentStore(config.watch.state_path, config.retention_days) as store:

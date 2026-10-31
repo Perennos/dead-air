@@ -45,12 +45,39 @@ creating a missing database, taking the writer lock, or resetting its counters.
 It displays only stream IDs and bounded evidence; source URLs and credentials
 are excluded. It is a freshness view, not proof that a process is running.
 
+Use `dead-air failures --config dead-air.toml` to list terminal delivery failures
+and their event and destination IDs. The command is read-only and paginates with
+`--limit` and `--offset`. A terminal failure can be acknowledged individually:
+
+```sh
+dead-air ack-delivery --config dead-air.toml --event-id EVENT_ID \
+  --destination-id DESTINATION_ID --operator "Alex Marzouca"
+```
+
+Acknowledgment records the operator and UTC time; it does not retry, resend, or
+delete the delivery row. Pending deliveries cannot be acknowledged. An
+unacknowledged terminal failure keeps overall status UNHEALTHY; acknowledgment
+removes that historical delivery failure from current health, while any open
+incident or unhealthy stream still keeps its own health result. Acknowledged
+failed deliveries remain available through the configured retention period and
+can then be pruned with their resolved incident history.
+Schema-2 acknowledgments use a short SQLite transaction that touches only
+delivery metadata, so they can run while a schema-2 watch process is active.
+If another SQLite write remains active beyond the bounded wait, acknowledgment
+returns an error and may be retried after the writer finishes.
+Schema-1 acknowledgment uses the normal exclusive migration path; stop an older
+watch process before retrying a migration that was blocked by it. Status and
+failure listing remain available while watch is active.
+
 Each latest observation keeps its original observation timestamp. A sample older
 than that stream's `max_gap_s`, a clock rollback, or changed source/detector
 configuration is UNKNOWN. A long later observation cannot refresh an earlier
 sample. Restart resets pending incident and recovery counters while preserving
 open incidents, delivery history, and the last snapshot. Older schema-1 state
 without snapshots remains readable as UNKNOWN until a new sample is recorded.
+Status and failure listing read schema-1 state without mutation. The first
+state-writing command migrates schema 1 to schema 2 in one exclusive SQLite
+transaction, preserving existing incidents and delivery rows.
 
 ## Budget several streams
 
@@ -103,8 +130,9 @@ deletes another state file automatically.
 Each destination is opt-in. Supply endpoints and credentials through the named
 environment variables; do not commit them. A healthy stream does not prove
 delivery works. Failed attempts remain visible in status; terminal failures are
-not automatically retried forever. Retention currently preserves history with
-unsent deliveries, so review failed/removed destinations and database growth.
+not automatically retried forever. Pending deliveries and unacknowledged
+failures are preserved. Review old failures and removed destinations, then
+acknowledge resolved delivery incidents so retention can bound database growth.
 There is no notification-test command that silently contacts your receivers.
 
 HTTP requests use bounded DNS workers and connect to the checked addresses,
