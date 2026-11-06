@@ -808,3 +808,36 @@ fn smtp_over_implicit_tls_delivers_to_a_verified_loopback_server() {
     assert!(transcript.contains(&id), "the message carries the stable event id");
     assert!(!transcript.contains("secret-password"), "credentials only travel base64-encoded inside TLS");
 }
+
+#[test]
+fn https_alerts_verify_the_hostname_not_just_the_chain() {
+    let temp = Temp::new();
+    let ca = test_ca(temp.path());
+    let collector = own_server(ServerState { collector: true, ..Default::default() }, Some(ca.server));
+    let network = NetworkConfig {
+        private_allowlist: vec![format!("localhost:{}", collector.port), format!("127.0.0.1:{}", collector.port)],
+        max_redirects: 0,
+        thumbnail_max_bytes: 1024,
+    };
+    let launcher = ChildLauncher {
+        exe: binary(),
+        extra_env: vec![("SSL_CERT_FILE".into(), ca.pem_path.to_string_lossy().into_owned())],
+    };
+    let hook =
+        DestinationConfig { allow_private: true, ..DestinationConfig::webhook("named-host", "webhook", "HOOK_URL") };
+    // The certificate names 127.0.0.1 only; `localhost` reaches the same socket but must fail.
+    let named = format!("https://localhost:{}/alert", collector.port);
+    let env = |name: &str| (name == "HOOK_URL").then(|| named.clone());
+    let outcome = send_destination_bounded(&hook, &event(&"3".repeat(32)), &network, 4.0, &env, &now_mono, &launcher);
+    assert!(!outcome.ok, "a certificate for 127.0.0.1 was accepted for localhost: {outcome:?}");
+    assert_eq!(
+        outcome.reason.as_deref(),
+        Some("HTTP_REQUEST_FAILED"),
+        "the name resolved and TLS refused it: {outcome:?}"
+    );
+    assert!(collector.state.received.lock().unwrap().is_empty(), "the request body reached the collector");
+    let exact = format!("https://127.0.0.1:{}/alert", collector.port);
+    let env = |name: &str| (name == "HOOK_URL").then(|| exact.clone());
+    let outcome = send_destination_bounded(&hook, &event(&"4".repeat(32)), &network, 4.0, &env, &now_mono, &launcher);
+    assert_eq!(outcome.status, Some(503), "the matching name connects (and meets the collector's first 503)");
+}

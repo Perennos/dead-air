@@ -4,18 +4,20 @@
 
 - Linux x86_64 (this workspace), rustc 1.97.0, FFmpeg 6.1.1 (GnuTLS build):
   `cargo fmt --check` clean; `cargo clippy --all-targets --locked -- -D warnings`
-  clean; `DEAD_AIR_REQUIRE_MEDIA=1 cargo test --locked`: **216 tests, 0 failures**
-  (44 unit, 172 integration across the 11 suites that run on Linux), about 20 seconds.
+  clean; `DEAD_AIR_REQUIRE_MEDIA=1 cargo test --locked`: **217 tests, 0 failures**
+  (44 unit, 173 integration across the 11 suites that run on Linux), about 20 seconds.
 - The ported suites pin every behaviour the Python 0.2.0 suite pinned (183 tests
   there), including native lavfi media, a real HLS incident with HTTPS alert retry
   and recovery through owned sender children, FFmpeg rejecting an untrusted
-  certificate, HTTP redirect/limit/off-air cases, sender deadlines against a
+  certificate, rustls refusing a valid chain for the wrong hostname, HTTP
+  redirect/limit/off-air cases, sender deadlines against a
   stalled HTTPS collector and a silent SMTP listener, SIGTERM (143), Ctrl+C (130),
   SIGKILL lock release, and the GUI's token, Host and Origin checks.
 - State written by the Python 0.2.0 release (`tests/fixtures/`) reads with the
   same `status --json` text apart from the added `briefs` and `incident_id`
   fields, the config fingerprint matches, and a Rust watcher continues that
   history (recovery, delivery rows kept, acknowledgment) on schema 2.
+- `cargo +1.85.0 check --all-targets --locked` passes (the declared minimum Rust).
 - `scripts/check-windows.sh` (`cargo check --target x86_64-pc-windows-gnu
   --all-targets` with stand-in C compilers for the bundled SQLite and ring) passes
   with no warnings. This type-checks Rust code only; it links nothing.
