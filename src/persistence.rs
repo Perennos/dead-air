@@ -336,6 +336,7 @@ impl IncidentStore {
         self.retention_days
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn insert_event(
         tx: &rusqlite::Transaction<'_>,
         stream: &StreamConfig,

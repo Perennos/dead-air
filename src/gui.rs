@@ -79,7 +79,8 @@ pub struct Gui {
     pub port: u16,
     pub token: String,
     pub config_path: PathBuf,
-    server: tiny_http::Server,
+    /// Dropped when serving ends, which closes the listening socket.
+    server: Mutex<Option<Arc<tiny_http::Server>>>,
     watcher: Mutex<Watcher>,
     last_request: Mutex<Instant>,
     idle_s: f64,
@@ -123,14 +124,14 @@ pub fn make_server(config_path: &Path, port: u16, idle_s: f64) -> std::io::Resul
             &ChildLauncher::current(),
         )
     });
-    let default_explainer: Explainer = Arc::new(|config, id| crate::tempo::explain(config, id));
+    let default_explainer: Explainer = Arc::new(crate::tempo::explain);
     Ok(Arc::new(Gui {
         port: bound,
         token: crate::random::token_urlsafe(),
         watch_argv: Mutex::new(default_watch_argv(&config_path)),
         tool_dir: Mutex::new(crate::alerts::helper_exe().parent().map(Path::to_path_buf)),
         config_path,
-        server,
+        server: Mutex::new(Some(Arc::new(server))),
         watcher: Mutex::new(Watcher::default()),
         last_request: Mutex::new(Instant::now()),
         idle_s,
@@ -158,7 +159,9 @@ impl Gui {
 
     pub fn shutdown(&self) {
         self.stopping.store(true, Ordering::SeqCst);
-        self.server.unblock();
+        if let Some(server) = lock(&self.server).as_ref() {
+            server.unblock();
+        }
     }
 
     pub fn start_watch(&self) -> (u16, Value) {
@@ -246,6 +249,9 @@ impl Gui {
 
     /// Serve until `shutdown`, an interrupt, or `idle_s` without a request while no watcher runs.
     pub fn serve_forever(self: &Arc<Self>) {
+        let Some(server) = lock(&self.server).clone() else {
+            return;
+        };
         while !self.stopping.load(Ordering::SeqCst) {
             if crate::interrupt::pending() != 0 && crate::interrupt::is_interruptible() {
                 break;
@@ -254,7 +260,7 @@ impl Gui {
             if idle && !self.running() {
                 break;
             }
-            let request = match self.server.recv_timeout(Duration::from_millis(100)) {
+            let request = match server.recv_timeout(Duration::from_millis(100)) {
                 Ok(Some(request)) => request,
                 Ok(None) => continue,
                 Err(_) => break,
@@ -279,6 +285,8 @@ impl Gui {
             }
         }
         self.stopping.store(true, Ordering::SeqCst);
+        lock(&self.server).take();
+        drop(server);
     }
 
     fn host_ok(&self, request: &tiny_http::Request) -> bool {
@@ -495,7 +503,8 @@ fn read_state(path: &Path) -> (std::collections::HashMap<String, Row>, Option<&'
                  FROM deliveries d JOIN events e ON e.event_id=d.event_id GROUP BY e.stream_id",
             )
             .map_err(|_| ())?;
-        let alerts: Vec<(String, String, String, Option<String>, Option<f64>)> = statement
+        type AlertRow = (String, String, String, Option<String>, Option<f64>);
+        let alerts: Vec<AlertRow> = statement
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
             .and_then(|r| r.collect())
             .map_err(|_| ())?;

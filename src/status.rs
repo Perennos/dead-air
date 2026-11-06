@@ -145,7 +145,8 @@ pub fn read_brief(db: &Connection, incident_id: &str) -> Result<Option<Value>> {
     if !table_exists(db, "tempo_briefs").map_err(read_failed)? {
         return Ok(None);
     }
-    let row: Option<(String, String, Option<String>, Option<String>, Option<i64>, String)> = db
+    type BriefRow = (String, String, Option<String>, Option<String>, Option<i64>, String);
+    let row: Option<BriefRow> = db
         .query_row(
             "SELECT created_at,model,receipt_id,job_id,review_required,brief FROM tempo_briefs WHERE incident_id=?",
             [incident_id],
@@ -463,7 +464,8 @@ pub fn incident_detail(config: &AppConfig, incident_id: &str) -> Result<Option<V
     let Some(Snapshot { db, version }) = open_snapshot(&config.watch.state_path)? else {
         return Ok(None);
     };
-    let row: Option<(String, String, String, f64, Option<String>, Option<f64>, String)> = db
+    type IncidentRow = (String, String, String, f64, Option<String>, Option<f64>, String);
+    let row: Option<IncidentRow> = db
         .query_row(
             "SELECT stream_id,condition,opened_at,opened_wall,closed_at,closed_wall,status FROM incidents WHERE incident_id=?",
             [incident_id],

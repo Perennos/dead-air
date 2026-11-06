@@ -71,7 +71,8 @@ fn within_video_limit(item: &serde_json::Map<String, Value>) -> bool {
 
 /// Python `max(items, key=rank)`: the first item with the greatest rank.
 fn best<'a>(items: &[&'a serde_json::Map<String, Value>]) -> Option<&'a serde_json::Map<String, Value>> {
-    let mut chosen: Option<(&serde_json::Map<String, Value>, (f64, f64))> = None;
+    type Ranked<'b> = (&'b serde_json::Map<String, Value>, (f64, f64));
+    let mut chosen: Option<Ranked<'a>> = None;
     for item in items {
         let rank = format_rank(item);
         if chosen.as_ref().is_none_or(|(_, best)| rank.partial_cmp(best) == Some(std::cmp::Ordering::Greater)) {
@@ -228,10 +229,8 @@ pub fn youtube_thumbnail_url(url: &str) -> Option<String> {
         parsed.path.trim_matches('/').split('/').next().unwrap_or("").to_string()
     } else if parsed.path.trim_end_matches('/') == "/watch" {
         query_first(&parsed.query, "v", false)
-    } else if let Some(rest) = parsed.path.strip_prefix("/live/") {
-        rest.split('/').next().unwrap_or("").to_string()
     } else {
-        return None;
+        parsed.path.strip_prefix("/live/")?.split('/').next().unwrap_or("").to_string()
     };
     let valid = video_id.len() == 11 && video_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
     if !YOUTUBE_HOSTS.contains(&host.as_str()) || !valid {

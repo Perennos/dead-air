@@ -207,9 +207,8 @@ fn send_smtp(
         Ok(SendOutcome::sent(None))
     })();
     if let Some(mut session) = client {
-        if deps.deadline.is_some_and(|d| (deps.monotonic)() >= d) {
-            session.close();
-        } else if session.quit().is_err() {
+        let spent = deps.deadline.is_some_and(|d| (deps.monotonic)() >= d);
+        if spent || session.quit().is_err() {
             session.close();
         }
     }
@@ -630,10 +629,13 @@ pub trait DeliveryLedger {
     ) -> Result<(), PersistenceError>;
 }
 
+/// Synchronous sender seam used by tests: `(destination, event, network) -> outcome`.
+pub type SenderFn<'a> = dyn FnMut(&DestinationConfig, &Value, &NetworkConfig) -> SendOutcome + 'a;
+
 pub struct DispatchOptions<'a> {
     pub now_wall: Option<f64>,
     /// Synchronous sender seam used by tests: `(destination, event, network) -> outcome`.
-    pub sender: Option<&'a mut dyn FnMut(&DestinationConfig, &Value, &NetworkConfig) -> SendOutcome>,
+    pub sender: Option<&'a mut SenderFn<'a>>,
     pub monotonic: &'a dyn Fn() -> f64,
     pub dispatch_budget_s: f64,
     pub attempt_budget_s: f64,

@@ -206,3 +206,8 @@ input:focus-visible, select:focus-visible { outline-color: var(--focus); }
 input:disabled, select:disabled { opacity: 0.55; cursor: not-allowed; }
 .msg { min-block-size: 1.5em; min-block-size: 1lh; color: var(--dim); overflow-wrap: anywhere; }
 .msg.is-error { color: var(--red-text); }
+
+/* Perennos Tempo briefs: advisory text under an open incident. */
+.brief { margin-top: var(--space-2xs); display: grid; gap: var(--space-3xs); }
+.brief-note { color: var(--dim); font-size: var(--text-sm); margin: 0; }
+.brief-text { white-space: pre-wrap; margin: 0; font-family: var(--font-mono); font-size: var(--text-sm); }

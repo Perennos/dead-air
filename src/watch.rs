@@ -109,6 +109,15 @@ pub fn check_cycle_stateful(
     Ok(observations)
 }
 
+/// Fold one cycle's exit code into a finite watch's result: unhealthy outranks unknown.
+pub fn aggregate(previous: i32, code: i32) -> i32 {
+    match code {
+        1 => 1,
+        2 if previous == 0 => 2,
+        _ => previous,
+    }
+}
+
 pub fn exit_code(observations: &[Observation]) -> i32 {
     if observations.iter().any(|o| o.status == "OFF_AIR" || o.status == "UNHEALTHY") {
         return 1;

@@ -11,6 +11,8 @@
   let flash = '';
   let running = false;
   let stopped = false;
+  let tempoEnabled = false;
+  const briefNotes = {};
   const OUTCOME = { sent: 'sent', failed: 'failed', pending: 'queued' };
   const HINTS = {
     ENDPOINT_UNAVAILABLE: 'the variable that holds this destination\'s URL is not set for this program',
@@ -70,6 +72,7 @@
       for (const item of s.incidents) {
         const li = el('li', '', item.kind + ' since ');
         li.append(stamp(item.since));
+        if (tempoEnabled && item.id) li.append(briefBlock(item));
         list.append(li);
       }
       fact('Open incidents', list);
@@ -89,6 +92,35 @@
     fact('Last checked', s.last_checked ? stamp(s.last_checked) : 'Not yet');
     article.append(facts);
     return article;
+  }
+
+  // Perennos Tempo briefs: shown only when [tempo] is enabled, advisory, never in the alert path.
+  function briefBlock(item) {
+    const box = el('div', 'brief');
+    if (item.brief) {
+      const receipt = item.brief.receipt_id ? 'receipt ' + item.brief.receipt_id : 'no receipt id';
+      box.append(el('p', 'brief-note', 'Perennos Tempo brief, advisory: review before use (' + receipt + ').'));
+      box.append(el('p', 'brief-text', item.brief.brief));
+    }
+    const button = el('button', 'btn btn-quiet', item.brief ? 'Ask Tempo again' : 'Ask Tempo for a brief');
+    button.type = 'button';
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+      briefNotes[item.id] = 'Asking Perennos Tempo. Alerts do not wait for this.';
+      await refresh();
+      try {
+        const response = await post('/api/explain', { incident_id: item.id });
+        const body = await response.json();
+        briefNotes[item.id] = response.ok ? '' : 'Tempo did not answer: ' + (body.error || response.status);
+      } catch (err) {
+        briefNotes[item.id] = 'Could not reach Dead Air. Is the program still running?';
+      }
+      await refresh();
+    });
+    box.append(button);
+    if (briefNotes[item.id]) box.append(el('p', 'brief-note', briefNotes[item.id]));
+    return box;
   }
 
   // The overall state: the pennants on <body>, the big mark and one line beside it.
@@ -113,6 +145,7 @@
     const cycle = s.last_cycle ? 'last cycle ' + when.format(new Date(s.last_cycle)) : 'no cycle yet';
     const w = s.watcher;
     running = w.running;
+    tempoEnabled = Boolean(s.tempo && s.tempo.enabled);
     const since = running ? new Date(w.started_at) : null;
     let lead = count + ', not watching';
     if (running) lead = 'watching ' + count + ' since ' + new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(since);

@@ -153,14 +153,18 @@ pub fn doctor(config: &AppConfig, runner: Runner<'_>, which: Which<'_>) -> Value
     if config.tempo.enabled {
         let report = crate::tempo::status_report(config);
         if report["health"] != "ok" {
-            result["warnings"].as_array_mut().map(|w| w.push(json!("TEMPO_UNREACHABLE")));
+            if let Some(warnings) = result["warnings"].as_array_mut() {
+                warnings.push(json!("TEMPO_UNREACHABLE"));
+            }
             advice.push(format!(
                 "Perennos Tempo did not answer at {}. Briefs are unavailable; monitoring and alerts are unaffected.",
                 config.tempo.url
             ));
         }
         if report["token"] != "present" {
-            result["warnings"].as_array_mut().map(|w| w.push(json!("TEMPO_TOKEN_MISSING")));
+            if let Some(warnings) = result["warnings"].as_array_mut() {
+                warnings.push(json!("TEMPO_TOKEN_MISSING"));
+            }
             advice.push(
                 "The Perennos Tempo token is missing: set TEMPO_GATEWAY_TOKEN or [tempo] home (or TEMPO_HOME).".into(),
             );

@@ -208,11 +208,14 @@ pub fn static_url(url: &str, source: &str, thumbnail: bool) -> Result<(String, u
     Ok((normalized, port as u16))
 }
 
+/// A fixed answer function: `(host, port) -> addresses`.
+pub type ResolveFn = dyn Fn(&str, u16) -> Result<Vec<String>, String> + Send + Sync;
+
 /// A resolver that returns textual addresses (test seam) or the bounded system resolver.
 #[derive(Clone)]
 pub enum Resolver {
     System,
-    Fixed(Arc<dyn Fn(&str, u16) -> Result<Vec<String>, String> + Send + Sync>),
+    Fixed(Arc<ResolveFn>),
 }
 
 impl Resolver {
@@ -239,7 +242,7 @@ pub fn system_resolve(host: &str, port: u16, timeout_s: f64) -> Result<Vec<IpAdd
     if let Some(literal) = parse_ip(host) {
         return Ok(vec![literal]);
     }
-    if !(timeout_s > 0.0) {
+    if timeout_s.is_nan() || timeout_s <= 0.0 {
         return Err(PolicyError::new("DNS_TIMEOUT"));
     }
     if OUTSTANDING_LOOKUPS.fetch_add(1, Ordering::SeqCst) >= MAX_OUTSTANDING_LOOKUPS {

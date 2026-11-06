@@ -261,11 +261,7 @@ fn run_watch(config: &AppConfig, max_cycles: Option<i64>, continuous: bool, json
             );
         }
         emit(&format_observations(report.observations, &diagnostics, json_mode));
-        match exit_code(report.observations) {
-            1 => aggregate = 1,
-            2 if aggregate == 0 => aggregate = 2,
-            _ => {}
-        }
+        aggregate = crate::watch::aggregate(aggregate, exit_code(report.observations));
         Ok(())
     };
     let hooks = WatchHooks {
