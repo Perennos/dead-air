@@ -2,8 +2,10 @@
 
 The current implementation order and acceptance criteria are in
 [Research and next steps](docs/RESEARCH_AND_NEXT_STEPS.md). Local status and package
-installation are implemented in 0.2.0; a web wall, external heartbeat, new provider
-adapters, loudness drift and stream recovery remain future work.
+installation are implemented in 0.2.0; 0.3.0 is the Rust release with a loopback metrics
+endpoint, optional Perennos Tempo incident briefs and a read-only MCP server. A web wall,
+external heartbeat, new provider adapters, loudness drift and stream recovery remain future
+work.
 
 This page lists candidates for future work. It is not a release promise, and an item here is not implemented or supported. The current project remains a local foreground CLI; consult the README and source for the behavior available today. Use only streams and media that the contributor owns or is authorized to test, and prefer synthetic fixtures for development.
 

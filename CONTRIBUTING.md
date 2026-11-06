@@ -17,15 +17,23 @@ If a secret was exposed, remove it from the working copy and ask the owner to ro
 
 ## Local checks
 
-Use the Python environment and setup described by the README. From `repo`, run the focused suites relevant to the change, for example:
+DEAD AIR is a Rust crate (edition 2024, minimum Rust 1.85). Run the same gates CI runs:
 
 ```text
-python -m unittest discover -s tests -p test_dead_air.py -v
-python -m unittest discover -s tests -p test_incidents.py -v
-python -m unittest discover -s tests -p test_alerts.py -v
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
 
-Tests and examples must use fake clocks, fake senders, and synthetic media/data where applicable. Do not use native media tools, external resolvers, live endpoints, or unbounded continuous runs as a routine contribution check. If a change needs an integration check, describe the authorization and exact boundary; do not put private endpoint details in the public change.
+The native media and loopback suites (`tests/media.rs`, `tests/network.rs`) need FFmpeg and
+ffprobe on PATH and are skipped without them; set `DEAD_AIR_REQUIRE_MEDIA=1` to make a missing
+tool a failure. They generate synthetic media and talk only to listeners they own. A focused
+run is `cargo test --test incidents` (or `alerts`, `observations`, `operations`, `gui`).
+
+On Linux, `scripts/check-windows.sh` type-checks the Windows build without a MinGW toolchain;
+real Windows builds and tests run on the windows-latest CI runner.
+
+Tests and examples must use fake clocks, fake senders, and synthetic media/data where applicable. Do not use external resolvers, live endpoints, or unbounded continuous runs as a routine contribution check. If a change needs an integration check, describe the authorization and exact boundary; do not put private endpoint details in the public change. Changes to on-disk state or `--json` output must keep `tests/watch.rs`'s Python 0.2.0 fixture checks passing.
 
 ## Pull requests
 

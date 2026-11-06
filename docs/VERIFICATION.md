@@ -1,4 +1,49 @@
-# Verification record for 0.2.0
+# Verification record for 0.3.0 (Rust)
+
+## Verified complete
+
+- Linux x86_64 (this workspace), rustc 1.97.0, FFmpeg 6.1.1 (GnuTLS build):
+  `cargo fmt --check` clean; `cargo clippy --all-targets --locked -- -D warnings`
+  clean; `DEAD_AIR_REQUIRE_MEDIA=1 cargo test --locked`: **215 tests, 0 failures**
+  (43 unit, 172 integration across the 11 suites that run on Linux), about 20 seconds.
+- The ported suites pin every behaviour the Python 0.2.0 suite pinned (183 tests
+  there), including native lavfi media, a real HLS incident with HTTPS alert retry
+  and recovery through owned sender children, FFmpeg rejecting an untrusted
+  certificate, HTTP redirect/limit/off-air cases, sender deadlines against a
+  stalled HTTPS collector and a silent SMTP listener, SIGTERM (143), Ctrl+C (130),
+  SIGKILL lock release, and the GUI's token, Host and Origin checks.
+- State written by the Python 0.2.0 release (`tests/fixtures/`) reads with the
+  same `status --json` text apart from the added `briefs` and `incident_id`
+  fields, the config fingerprint matches, and a Rust watcher continues that
+  history (recovery, delivery rows kept, acknowledgment) on schema 2.
+- `scripts/check-windows.sh` (`cargo check --target x86_64-pc-windows-gnu
+  --all-targets` with stand-in C compilers for the bundled SQLite and ring) passes
+  with no warnings. This type-checks Rust code only; it links nothing.
+- Release build (`cargo build --release --locked`, thin LTO, one codegen unit,
+  stripped): 6.1 MB for x86_64-unknown-linux-gnu. Cold start of `validate` is about
+  1.6 ms (median of 20) against about 105 ms for the Python release on the same
+  machine.
+
+Native tests used generated media and bounded loopback HTTP/HLS, HTTPS (a
+throwaway test CA), Tempo and SMTP listeners owned by the tests. No public
+stream, real alert recipient or real Tempo gateway was contacted.
+
+## Untested
+
+- Windows and macOS execution: only the Windows type-check above ran here. The CI
+  matrix (ubuntu, windows and macos runners) is the evidence for those platforms,
+  and none of its results are implied by this record.
+- The release workflow, the musl and macOS release targets, and the installers'
+  real download path against a published release (the installer's download,
+  checksum and fallback logic is tested with a fake release folder).
+- Real YouTube or other provider qualification, a completed 24-hour soak,
+  sleep/resume, power loss and receipt by a human; a real Perennos Tempo gateway
+  and a real MCP host.
+- Full TLS hostname behavior across FFmpeg backends/nested playlist transports,
+  and hostile URL/process containment.
+- Filesystems without local lock/hard-link semantics; network shares.
+
+# Verification record for 0.2.0 (Python)
 
 ## Verified complete
 
