@@ -1,2 +1,0 @@
-# Optional extractor for supported YouTube sources; no framework is required.
-yt-dlp==2026.8.19

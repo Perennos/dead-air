@@ -8,3 +8,9 @@
 *.cmd text eol=crlf
 *.json text eol=lf
 brand/** -text
+*.rs text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.js text eol=lf
+Cargo.lock text eol=lf
+*.sqlite3 binary

@@ -6,8 +6,11 @@ mod common;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 use common::*;
 use dead_air::config::{EXAMPLE_TOML, parse_config_text};

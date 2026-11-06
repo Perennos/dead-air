@@ -78,3 +78,18 @@ allow_private = false
 # endpoint_env = "DEAD_AIR_WEBHOOK_URL"
 # token_env = "DEAD_AIR_WEBHOOK_TOKEN" # optional bearer token
 # allow_private = true # optional; still requires this exact HTTPS host:port in network.private_allowlist
+
+# Optional: Perennos Tempo, a local AI router, can write an advisory brief about one incident
+# when you run `dead-air explain INCIDENT_ID` (or press the page's Tempo button). It receives
+# incident metadata only. Alerts never wait on Tempo and never pass through it.
+# [tempo]
+# enabled = true
+# url = "http://127.0.0.1:8765" # loopback only: 127.0.0.1, [::1] or localhost
+# home = ""                     # Tempo data folder; empty uses TEMPO_HOME (token: ledger/gateway-token)
+# model = "tempo/auto"
+# timeout_seconds = 120
+
+# Optional: a Prometheus text endpoint served by `watch` on 127.0.0.1 only.
+# [metrics]
+# enabled = true
+# port = 47825 # http://127.0.0.1:47825/metrics

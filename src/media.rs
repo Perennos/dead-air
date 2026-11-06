@@ -853,6 +853,7 @@ pub struct TempDir {
 impl TempDir {
     pub fn new(prefix: &str) -> std::io::Result<Self> {
         let path = std::env::temp_dir().join(format!("{prefix}{}", &crate::random::uuid4_hex()[..16]));
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
         {

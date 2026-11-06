@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, archive: tar.gz }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, archive: tar.gz }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, archive: zip }
+          - { os: macos-latest, target: aarch64-apple-darwin, archive: tar.gz }
+          - { os: macos-latest, target: x86_64-apple-darwin, archive: tar.gz }
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Check the tag matches the crate and installer versions
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          grep -q "^version = \"$VERSION\"$" Cargo.toml
+          grep -q "^VERSION=$VERSION$" install.sh
+          grep -q "set \"VERSION=$VERSION\"" install.cmd
+      - name: Rust toolchain (preinstalled rustup)
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+          rustup default stable
+      - name: musl C toolchain
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y musl-tools
+      - name: Build
+        shell: bash
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          NAME="dead-air-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/$NAME"
+          EXE=dead-air
+          [ "${{ matrix.archive }}" = zip ] && EXE=dead-air.exe
+          cp "target/${{ matrix.target }}/release/$EXE" "dist/$NAME/"
+          cp README.md LICENSE NOTICE CHANGELOG.md dead-air.example.toml "dist/$NAME/"
+          cd dist
+          if [ "${{ matrix.archive }}" = zip ]; then
+            pwsh -NoProfile -Command "Compress-Archive -Path '$NAME' -DestinationPath '$NAME.zip'"
+          else
+            tar -czf "$NAME.tar.gz" "$NAME"
+          fi
+          rm -rf "$NAME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum dead-air-* > SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish with gh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "DEAD AIR ${GITHUB_REF_NAME}" \
+            --notes "See CHANGELOG.md for changes and upgrade notes. Verify downloads against SHA256SUMS."

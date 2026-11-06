@@ -7,74 +7,71 @@ on:
 permissions:
   contents: read
 
-jobs:
-  source:
-    name: Source checks (${{ matrix.os }}, Python ${{ matrix.python-version }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        python-version: ['3.11', '3.14']
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install pinned requirements from official PyPI
-        run: python -m pip install --disable-pip-version-check --index-url https://pypi.org/simple -r requirements.txt
-      - name: Install package and exercise console entry point outside checkout
-        run: |
-          python -m pip install --disable-pip-version-check --index-url https://pypi.org/simple .
-          python scripts/smoke_install.py
-      - name: Validate example from a fresh clean copy
-        run: >-
-          python -c "import pathlib,shutil,subprocess,sys,tempfile; src=pathlib.Path.cwd(); temporary=tempfile.TemporaryDirectory(); clean=pathlib.Path(temporary.name)/'clean'; clean.mkdir(); shutil.copytree(src/'deadair',clean/'deadair'); [shutil.copy2(src/name,clean/name) for name in ('dead_air.py','dead-air.example.toml','requirements.txt')]; subprocess.run([sys.executable,str(clean/'dead_air.py'),'validate','--config',str(clean/'dead-air.example.toml')],cwd=clean,check=True)"
-      - name: Run source suite
-        run: python -m unittest discover -s tests -p test_dead_air.py -v
-      - name: Run incident suite
-        run: python -m unittest discover -s tests -p test_incidents.py -v
-      - name: Run alert suite
-        run: python -m unittest discover -s tests -p test_alerts.py -v
-      - name: Run operations and crash-recovery suite
-        run: python -m unittest discover -s tests -p test_operations.py -v
-      - name: Run Windows native-media suite when tools are available
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
-          $ffprobe = Get-Command ffprobe -ErrorAction SilentlyContinue
-          if ($null -eq $ffmpeg -or $null -eq $ffprobe) {
-            Write-Host "::notice::Native media tests skipped: ffmpeg and ffprobe are not both available on this Windows runner."
-          } else {
-            python -m unittest discover -s tests -p test_media.py -v
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+env:
+  CARGO_TERM_COLOR: always
 
-  full-discovery:
-    name: Full discovery with FFmpeg lavfi (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+jobs:
+  test:
+    name: fmt, clippy and tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.14']
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install system FFmpeg and OpenSSL for local fixtures
+      - name: Rust toolchain (preinstalled rustup)
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+      - name: Install FFmpeg (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y ffmpeg openssl
+          sudo apt-get install --no-install-recommends -y ffmpeg
+      - name: Install FFmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
       - name: Confirm local media tools
+        if: runner.os != 'Windows'
         run: |
           ffmpeg -version
           ffprobe -version
-          openssl version
-      - name: Install pinned requirements from official PyPI
-        run: python -m pip install --disable-pip-version-check --index-url https://pypi.org/simple -r requirements.txt
-      - name: Run full test discovery with synthetic media
-        run: python -m unittest discover -s tests -v
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Tests (native media and loopback suites required on Linux and macOS)
+        if: runner.os != 'Windows'
+        env:
+          DEAD_AIR_REQUIRE_MEDIA: "1"
+        run: cargo test --locked
+      - name: Tests (Windows; native media suites run when FFmpeg is on PATH)
+        if: runner.os == 'Windows'
+        run: cargo test --locked
+      - name: Installer dry runs
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then cmd //c "install.cmd /dry-run"; else bash install.sh --dry-run; fi
+      - name: Installed binary smoke check outside the checkout
+        shell: bash
+        run: |
+          cargo build --release --locked
+          BIN="$PWD/target/release/dead-air"
+          [ -f "$BIN.exe" ] && BIN="$BIN.exe"
+          WORK=$(mktemp -d)
+          cd "$WORK"
+          "$BIN" --version | grep -q "dead-air 0.3.0"
+          "$BIN" init | grep -q '"created": true'
+          "$BIN" validate --config dead-air.toml | grep -q '"ok": true'
+          set +e
+          "$BIN" status --config dead-air.toml --json > status.json
+          code=$?
+          set -e
+          [ "$code" = 2 ]
+          grep -q '"network_contacted": false' status.json
+          [ ! -e state ]
+          "$BIN" tempo policy | grep -q deadair_status

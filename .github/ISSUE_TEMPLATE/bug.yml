@@ -43,7 +43,7 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Python version, operating system, and sanitized command. Do not attach a private config.
+      description: dead-air --version, FFmpeg version, operating system, and sanitized command. Do not attach a private config.
     validations:
       required: true
   - type: checkboxes

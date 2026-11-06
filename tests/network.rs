@@ -656,7 +656,13 @@ fn https_media_capture_rejects_an_untrusted_certificate() {
     let argv = dead_air::media::build_capture_argv(&media_input, &config.streams[0], &config, &output).unwrap();
     let result = run_bounded(&argv, 3.0, &RunOptions::output(8192));
     assert_ne!(result.returncode, Some(0), "FFmpeg accepted an untrusted TLS certificate");
-    assert!(result.stderr.to_lowercase().contains("certificate"), "{}", result.stderr);
+    let message = result.stderr.to_lowercase();
+    // GnuTLS (Debian/Ubuntu) names the certificate; other TLS backends word it differently.
+    assert!(
+        ["certificate", "verif", "tls", "ssl", "handshake"].iter().any(|w| message.contains(w)),
+        "{}",
+        result.stderr
+    );
     assert!(result.cleanup_complete);
 }
 
