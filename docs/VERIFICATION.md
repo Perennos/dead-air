@@ -4,8 +4,8 @@
 
 - Linux x86_64 (this workspace), rustc 1.97.0, FFmpeg 6.1.1 (GnuTLS build):
   `cargo fmt --check` clean; `cargo clippy --all-targets --locked -- -D warnings`
-  clean; `DEAD_AIR_REQUIRE_MEDIA=1 cargo test --locked`: **215 tests, 0 failures**
-  (43 unit, 172 integration across the 11 suites that run on Linux), about 20 seconds.
+  clean; `DEAD_AIR_REQUIRE_MEDIA=1 cargo test --locked`: **216 tests, 0 failures**
+  (44 unit, 172 integration across the 11 suites that run on Linux), about 20 seconds.
 - The ported suites pin every behaviour the Python 0.2.0 suite pinned (183 tests
   there), including native lavfi media, a real HLS incident with HTTPS alert retry
   and recovery through owned sender children, FFmpeg rejecting an untrusted

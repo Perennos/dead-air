@@ -286,11 +286,14 @@ pub struct Request<'a> {
     pub read_body: bool,
 }
 
+/// The first blank line ends the head, whether the server uses CRLF or bare LF.
 fn find_header_end(data: &[u8]) -> Option<(usize, usize)> {
-    if let Some(i) = data.windows(4).position(|w| w == b"\r\n\r\n") {
-        return Some((i, i + 4));
+    let crlf = data.windows(4).position(|w| w == b"\r\n\r\n").map(|i| (i, i + 4));
+    let lf = data.windows(2).position(|w| w == b"\n\n").map(|i| (i, i + 2));
+    match (crlf, lf) {
+        (Some(a), Some(b)) => Some(if a.0 <= b.0 { a } else { b }),
+        (a, b) => a.or(b),
     }
-    data.windows(2).position(|w| w == b"\n\n").map(|i| (i, i + 2))
 }
 
 /// Send one request and read one response before `deadline`.
@@ -674,6 +677,54 @@ mod tests {
         let outcome =
             bounded_http_post("http://hooks.invalid/hook", b"{}", &[], 5.0, &network, &Resolver::System, false);
         assert_eq!(outcome, (None, Some("TLS_REQUIRED".into()), None));
+    }
+
+    fn serve_once(reply: &'static [u8]) -> u16 {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer);
+            let _ = socket.write_all(reply);
+        });
+        port
+    }
+
+    fn get(port: u16, max_body: usize) -> RawResponse {
+        let addresses = ["127.0.0.1".parse().unwrap()];
+        let request = Request {
+            method: "GET",
+            tls: false,
+            host: "127.0.0.1",
+            port,
+            addresses: &addresses,
+            host_header: format!("127.0.0.1:{port}"),
+            selector: "/".into(),
+            headers: vec![],
+            body: b"",
+            max_body,
+            read_body: true,
+        };
+        exchange(&request, Instant::now() + Duration::from_secs(5)).unwrap()
+    }
+
+    #[test]
+    fn chunked_bodies_continue_responses_and_bare_lf_heads_are_parsed() {
+        let port = serve_once(b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Type: application/vnd.apple.mpegurl\r\n\r\n8\r\n#EXTM3U\n\r\n10;ext=1\r\n#EXT-X-ENDLIST\n\n\r\n0\r\n\r\n");
+        let response = get(port, 1024);
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"#EXTM3U\n#EXT-X-ENDLIST\n\n");
+        assert!(!response.truncated && !response.read_error);
+        let port = serve_once(b"HTTP/1.0 200 OK\nContent-Type: text/plain\n\nline one\r\n\r\nline two");
+        let response = get(port, 1024);
+        assert_eq!(response.body, b"line one\r\n\r\nline two", "a bare-LF head ends at its own blank line");
+        let port = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n0123456789");
+        let response = get(port, 4);
+        assert_eq!((response.body.as_slice(), response.truncated), (b"0123".as_slice(), true));
+        let port = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n0123");
+        assert!(get(port, 1024).read_error, "a short Content-Length body is a read failure");
     }
 
     #[test]
