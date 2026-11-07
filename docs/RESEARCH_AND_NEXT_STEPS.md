@@ -1,6 +1,10 @@
 # Research and next steps
 
-Research date: October 23, 2026. Sources are primary project documentation,
+Research date: October 23, 2026, for the Python 0.2.0 release. The 0.3.0 Rust port keeps
+the same decisions: a deterministic detector core, read-only `mode=ro` readers, the same
+OS locks (`flock`; `LockFileEx` on the byte `msvcrt.locking` used) and the separation of
+DEAD AIR's own HTTP transport from FFmpeg's. Its loopback `/metrics` endpoint is a local
+step toward item 2 below; it does not replace an off-host check. Sources are primary project documentation,
 maintainer repositories, and standards material. Recommendations below are
 engineering judgments, not verified integration claims. No live streams, paid
 services, private files, or media uploads were used.

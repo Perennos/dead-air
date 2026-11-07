@@ -1,14 +1,17 @@
-__pycache__/
-*.py[cod]
+/target/
 dead-air.toml
 state/
-.venv/
-build/
-dist/
-*.egg-info/
 *.sqlite3
 *.sqlite3-journal
 *.sqlite3.lock
 *.db
 *.db-journal
 *.db.lock
+# Left over from Python 0.2.0 checkouts
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+!/tests/fixtures/*.sqlite3

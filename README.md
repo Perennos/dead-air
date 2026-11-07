@@ -19,48 +19,48 @@ Use sustained samples and positive recovery before treating a source as restored
 
 Remote captures include a 100 ms acquisition prefix followed by the configured full common measurement duration. Startup after that prefix, or missing or gapped decoded content in the measurement window, remains **UNKNOWN**.
 
-The command line offers:
+DEAD AIR is one program, `dead-air`, written in Rust. The command line offers:
 
 - **init** — create a private starter configuration without overwriting an existing file.
 - **status** — inspect persisted health, stale evidence, incidents and alert delivery without network access or state writes.
 - **validate** — parse the TOML configuration without network access or state writes.
-- **doctor** — inspect local binary versions and detector filters.
+- **doctor** — inspect local binary versions and detector filters, and say in plain words what is missing.
 - **check** — perform one bounded observation cycle.
 - **watch** — choose exactly one mode: **--max-cycles N** for a finite run (1–10,000 cycles), or **--continuous** for the authorized foreground 24/7 monitoring path. Both modes run one serial cycle at a time, keep the existing per-cycle and notification bounds, and flush one JSON observation line as each cycle completes. Continuous mode ends on Ctrl+C (exit 130, after owned-child and state cleanup) or a fatal persistence/sender-cleanup failure (exit 3 with a flushed error; sender-cleanup failure is persisted before stopping when the state write succeeds). It does not daemonize or automatically restart.
 - **gui** — serve the local page at 127.0.0.1, show read-only status, add streams, and control only the watcher child it starts.
+- **failures**, **ack-delivery** and **incidents** — list terminal alert failures, acknowledge one, and list incident ids, all from local state.
+- **explain** — optional: ask [Perennos Tempo](docs/TEMPO.md), a local AI router, for an advisory brief about one incident.
+- **mcp** and **tempo** — optional: serve read-only MCP tools over stdio, and print Tempo status, a tool-policy fragment or an MCP client entry.
 
 These commands report observations; they do not control a stream, encoder, or OBS. No live source has been validated by this README.
 
 ## Get running
 
-Python 3.11+, FFmpeg and ffprobe are required. No API key, account, cloud service,
-or mandatory Python dependency is needed. yt-dlp is optional for YouTube.
+You need FFmpeg and ffprobe. No API key, account, cloud service or language
+runtime is needed. yt-dlp is optional and only used for YouTube sources.
 
 ```sh
 git clone https://github.com/Perennos/dead-air.git
 cd dead-air
-python -m venv .venv
+bash install.sh --dry-run   # Windows: install.cmd /dry-run
+bash install.sh             # Windows: install.cmd
 ```
 
-Use your environment's interpreter explicitly:
-
-| Platform | Install the core | Installed command |
-| --- | --- | --- |
-| Windows | `.venv\Scripts\python.exe -m pip install .` | `.venv\Scripts\dead-air.exe` |
-| Linux/macOS | `.venv/bin/python -m pip install .` | `.venv/bin/dead-air` |
-
-For YouTube, install `".[youtube]"` instead of `.`. Provider changes and local
-JavaScript/EJS requirements still need qualification; the adapter does not sign
-in or import browser cookies. The pinned adapter is also listed in requirements.txt.
+The installer puts one `dead-air` binary in `~/.local/bin` (Windows:
+`%LOCALAPPDATA%\Perennos\dead-air\bin`). It downloads the published release build for
+your machine and checks it against the release's `SHA256SUMS`; when there is no
+release build for your machine it runs `cargo install --locked` from the
+checkout instead, and when Rust is missing it prints the one-line rustup
+command and stops. It never needs administrator rights, and it writes a
+desktop launcher for the local page. To build by hand: `cargo install --locked --path .`.
 
 Install system media tools yourself; the application does not run administrator
 commands. Examples are `winget install --id Gyan.FFmpeg.Shared -e` on Windows or
 `sudo apt install ffmpeg` on Debian/Ubuntu. Availability depends on your machine.
-Confirm both `ffmpeg` and `ffprobe` resolve in a new terminal.
-
-The examples below assume the environment's script directory is on PATH. Use the
-full command path from the table otherwise. From a checkout,
-`python dead_air.py` or `python -m deadair` can replace `dead-air`.
+Confirm both `ffmpeg` and `ffprobe` resolve in a new terminal. For YouTube,
+install yt-dlp yourself (0.2.0 was qualified against yt-dlp 2026.8.19); provider
+changes and local JavaScript/EJS requirements still need qualification, and the
+adapter does not sign in or import browser cookies.
 
 ```sh
 dead-air init
@@ -77,9 +77,7 @@ notifications disabled. Configure a destination explicitly if you want alerts.
 
 ## Local GUI
 
-Run `dead-air gui --config dead-air.toml` from the environment's script directory, or `python dead_air.py gui --config dead-air.toml` from a checkout. It binds to 127.0.0.1 (port 47824 by default); `--port N`, `--no-browser`, and `--watch` adjust startup. The page validates each new stream with the same config loader, shows persisted status without writing state, and sends a test alert only after that button is pressed. Start and stop control only the watcher child owned by this page. Host and Origin checks and a per-run token protect local actions. Closing the browser tab does not stop a running watcher; use Stop or Quit.
-
-`install.cmd` or `bash install.sh` creates a virtual environment and a local launcher after a dry run (`install.cmd /dry-run` or `bash install.sh --dry-run`). They do not install Python or FFmpeg.
+Run `dead-air gui --config dead-air.toml`, or open the launcher the installer wrote. It binds to 127.0.0.1 (port 47824 by default); `--port N`, `--no-browser`, and `--watch` adjust startup. The page validates each new stream with the same config loader, shows persisted status without writing state, and sends a test alert only after that button is pressed. Start and stop control only the watcher child owned by this page. Host and Origin checks and a per-run token protect local actions. Closing the browser tab does not stop a running watcher; use Stop or Quit.
 
 ## Watch and inspect
 
@@ -106,9 +104,32 @@ or operational error, 130 Ctrl+C, and 143 SIGTERM. Status also accounts for open
 incidents and failed deliveries. See [operations](docs/OPERATIONS.md) for the full
 contract, alert retry timing, state ownership, upgrade/rollback, and limits.
 
+An optional `[metrics]` table makes `watch` serve Prometheus text at
+`http://127.0.0.1:47825/metrics`: per-source condition signals, last-cycle
+duration, open incidents and delivery failures, on loopback only. See
+[operations](docs/OPERATIONS.md#metrics).
+
 Relative `state_path` and explicit relative tool paths resolve beside the TOML;
-bare executable names use PATH. When upgrading from 0.1.0, stop old instances,
-review these paths, retain `--json` for machine consumers, and read the lock notes.
+bare executable names use PATH.
+
+## Upgrading from 0.2.0 (Python)
+
+The Rust release reads the same TOML keys, the same SQLite state (schema 2, and
+schema 1 for status), the same lock files and prints the same `--json` shapes (with a few added fields), so
+history, open incidents and pending alerts carry over. Stop every old monitor
+first, install the binary, then run `dead-air status --config dead-air.toml`
+before starting `watch`. `python dead_air.py` and `python -m deadair` are gone;
+call `dead-air`. The [changelog](CHANGELOG.md) lists every visible difference.
+
+## Perennos Tempo and MCP (optional)
+
+With `[tempo] enabled = true`, `dead-air explain INCIDENT_ID` (and a button on
+the page) asks the local Tempo gateway for a short advisory brief. Only incident
+metadata leaves DEAD AIR: source label, condition, timings and an evidence
+summary, never source URLs, secrets or alert targets. The brief and Tempo's
+receipt id are stored beside the incident and shown by `status`. Alerts are
+deterministic and never wait on Tempo. `dead-air mcp` serves read-only tools over
+the same persisted state as `status`. See [docs/TEMPO.md](docs/TEMPO.md).
 
 ## Development and next steps
 
@@ -117,19 +138,22 @@ review these paths, retain `--json` for machine consumers, and read the lock not
 - [Changelog and upgrade notes](CHANGELOG.md)
 - [Contributors](CONTRIBUTORS.md), including [@marzouca](https://github.com/marzouca)
 
-Run `python -m unittest discover -s tests -v` with FFmpeg, ffprobe and OpenSSL
-available. Tests use synthetic media and owned loopback endpoints. CI covers
-Python 3.11/3.14 on Linux and Windows, plus an installed-package smoke check.
-Do not infer a platform's latest CI result from this description.
+Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and
+`cargo test` with FFmpeg and ffprobe available; set `DEAD_AIR_REQUIRE_MEDIA=1`
+to make missing media tools a failure instead of a skip. Tests use synthetic
+media and owned loopback endpoints. CI covers Linux, macOS and Windows; the
+native media suites need FFmpeg on the runner. Do not infer a platform's latest
+CI result from this description.
 
 ## Privacy and safety
 
 - The core observer needs no stream account or provider API key. Optional notification destinations may need secrets; supply those through environment variables, never in the TOML file, source control, or a support log.
-- Public targets are the default. Private and loopback targets are denied unless the operator explicitly opts in and names the exact allowed targets. Python HTTPS verifies certificates and hostnames; HTTPS media capture explicitly enables FFmpeg peer verification. FFmpeg hostname checking depends on its TLS backend; qualify the installed build and nested source path.
-- This is not a hostile-URL sandbox. It trusts operator-owned configuration and local tool paths. Do not feed it untrusted URLs or configurations. HTTP uses bounded DNS workers and connects to checked addresses. FFmpeg resolves media, nested playlists and redirects separately; those requests are not pinned by the Python transport.
+- Public targets are the default. Private and loopback targets are denied unless the operator explicitly opts in and names the exact allowed targets. DEAD AIR's own HTTPS and SMTP verify certificates and hostnames; HTTPS media capture explicitly enables FFmpeg peer verification. FFmpeg hostname checking depends on its TLS backend; qualify the installed build and nested source path.
+- This is not a hostile-URL sandbox. It trusts operator-owned configuration and local tool paths. Do not feed it untrusted URLs or configurations. HTTP and SMTP use bounded DNS lookups and connect to checked addresses. FFmpeg resolves media, nested playlists and redirects separately; those requests are not pinned by DEAD AIR's transport.
 - Process cleanup has platform limits. On Windows, stopping a direct child does not provide a general guarantee that every descendant process is contained or stopped.
 - Local state and event evidence persist across cycles. Protect that directory as operational data; it reveals stream IDs and monitoring history. Temporary captures and operational process arguments may contain private source information.
 - Notifications use stable event IDs and at most three delivery attempts, scheduled at 0, 30, and 120 seconds. Delivery is at-least-once: a receiver may accept a message before a connection fails, so a retry can duplicate it. SMTP acceptance or webhook success is protocol evidence, not proof a person read an alert.
+- Perennos Tempo is optional, loopback-only, and never in the alert path. A brief is advisory output from a model: review it before you act on it.
 - This tool does not take over streams, restart encoders, change broadcast scenes, or operate OBS.
 
 ## Cultural and type credits
