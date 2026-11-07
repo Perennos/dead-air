@@ -157,10 +157,16 @@ fn call(
     }
 }
 
-fn status_error(status: u16) -> TempoError {
+fn status_error(status: u16, url: &str) -> TempoError {
     match status {
         401 => TempoError("Tempo rejected the token; rerun Tempo setup".into()),
         503 => TempoError("Tempo has no qualified local engine or GPU lease right now".into()),
+        // The gateway answers its own paths, so a 404 means something else is on this port (for example a Tempo
+        // service that does not serve /v1/chat/completions). It is not an authentication problem.
+        404 => TempoError(format!(
+            "Tempo's gateway isn't running here: {url} answered 404 (not found). Something else may be using this \
+             port; start Tempo's gateway or change [tempo] url"
+        )),
         other => TempoError(format!("Perennos Tempo returned HTTP {other}")),
     }
 }
@@ -169,7 +175,7 @@ fn status_error(status: u16) -> TempoError {
 pub fn health(config: &AppConfig) -> Result<Value, TempoError> {
     let reply = call(&config.tempo.url, "GET", "/health", None, None, config.tempo.timeout_seconds.min(5.0))?;
     if !(200..300).contains(&reply.status) {
-        return Err(status_error(reply.status));
+        return Err(status_error(reply.status, &config.tempo.url));
     }
     serde_json::from_slice(&reply.body).map_err(|_| TempoError("Perennos Tempo returned an invalid response".into()))
 }
@@ -179,7 +185,7 @@ pub fn model_count(config: &AppConfig, token: &str) -> Result<usize, TempoError>
     let reply =
         call(&config.tempo.url, "GET", "/v1/models", Some(token), None, config.tempo.timeout_seconds.min(15.0))?;
     if !(200..300).contains(&reply.status) {
-        return Err(status_error(reply.status));
+        return Err(status_error(reply.status, &config.tempo.url));
     }
     let payload: Value = serde_json::from_slice(&reply.body)
         .map_err(|_| TempoError("Perennos Tempo returned an invalid response".into()))?;
@@ -245,7 +251,7 @@ pub fn chat(
         config.tempo.timeout_seconds,
     )?;
     if !(200..300).contains(&reply.status) {
-        return Err(status_error(reply.status));
+        return Err(status_error(reply.status, &config.tempo.url));
     }
     let payload: Value = serde_json::from_slice(&reply.body)
         .map_err(|_| TempoError("Perennos Tempo returned an invalid response".into()))?;

@@ -74,7 +74,11 @@ required. Look the receipt up in Tempo's hash-chained receipts to audit the rout
 
 Errors are plain: `Perennos Tempo is not running at <url>`, `Tempo rejected the
 token; rerun Tempo setup` (401), `Tempo has no qualified local engine or GPU lease
-right now` (503). A timeout or reset after the request was sent is never retried:
+right now` (503), and `Tempo's gateway isn't running here: <url> answered 404` when
+something else holds the port (for example a Tempo service that does not serve
+`/v1/chat/completions`; `tempo status` shows it under `models_detail` while `health` still
+reads `ok`). A 404 is never reported as an authentication problem. A timeout or reset after
+the request was sent is never retried:
 DEAD AIR says the outcome is unknown and points at Tempo receipts.
 
 On the page, each open incident gets an **Ask Tempo for a brief** button only

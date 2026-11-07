@@ -22,6 +22,8 @@ enum Mode {
     Unauthorized,
     Busy,
     Hang,
+    /// Answers /health but serves no gateway path: another Tempo service on the port.
+    NoGateway,
 }
 
 /// `(method, path, headers, body)` for every request the fake gateway saw.
@@ -89,6 +91,7 @@ fn fake_tempo(mode: Mode) -> FakeTempo {
                     }
                     (Mode::Unauthorized, _) => (401, "", json!({"error": {"code": "unauthorized"}})),
                     (Mode::Busy, _) => (503, "", json!({"error": {"code": "no_engine"}})),
+                    (Mode::NoGateway, _) => (404, "", json!({})),
                     (Mode::Ok, _) if !authorized => (401, "", json!({"error": {"code": "unauthorized"}})),
                     (Mode::Ok, "/v1/models") => {
                         (200, "", json!({"data": [{"id": "tempo/auto"}, {"id": "tempo/fast"}]}))
@@ -218,6 +221,25 @@ fn tempo_failures_are_plain_and_never_retried() {
     disabled.tempo.enabled = false;
     assert_eq!(dead_air::tempo::explain(&disabled, &incident).unwrap_err().0, 3);
     assert_eq!(dead_air::tempo::explain(&config, &"f".repeat(32)).unwrap_err().0, 1);
+}
+
+#[test]
+fn a_404_from_a_service_on_the_port_says_the_gateway_is_not_running_here() {
+    let tempo = fake_tempo(Mode::NoGateway);
+    let temp = Temp::new();
+    let config_path = tempo_config(&temp, tempo.port, 5);
+    let incident = seed_incident(&config_path);
+    let want = format!("Tempo's gateway isn't running here: http://127.0.0.1:{} answered 404", tempo.port);
+    let config = dead_air::config::load_config(&config_path).unwrap();
+    let error = dead_air::tempo::explain(&config, &incident).unwrap_err();
+    assert!(error.1.starts_with(&want), "{}", error.1);
+    assert!(!error.1.contains("token") && !error.1.contains(TOKEN));
+    // /health answers, so status must not call this healthy: the model list says what is wrong.
+    let (code, out, err) = run_binary(temp.path(), &["tempo", "status", "--config", &config_path.to_string_lossy()]);
+    let report = value(&out);
+    assert_eq!(report["health"], "ok", "{out}{err}");
+    assert!(report["models_detail"].as_str().unwrap().starts_with(&want), "{out}");
+    assert!(code != 0 || report["models"].is_null());
 }
 
 #[test]
