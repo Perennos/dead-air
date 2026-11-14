@@ -1,0 +1,9 @@
+# id	last_signal_ms	now_ms	threshold_ms	already_quiet	expected
+before-boundary	1000	600999	600000	false	healthy
+at-boundary	1000	601000	600000	false	alert
+still-quiet	1000	900000	600000	true	quiet
+recovered	1000	600999	600000	true	recovered
+never-heard	-	600000	600000	false	unknown
+future-heartbeat	1000	999	600000	false	unknown
+zero-window	1000	1000	0	false	unknown
+clock-rollback	7000	6000	1000	false	unknown
