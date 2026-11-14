@@ -1,0 +1,15 @@
+[package]
+name = "perennos-dead-air-silence-core"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Deterministic quiet-state transitions for timestamped signals"
+
+[features]
+trace-fixtures = []
+
+[lib]
+name = "perennos_dead_air_silence_core"
+path = "src/lib.rs"
+
+[workspace]

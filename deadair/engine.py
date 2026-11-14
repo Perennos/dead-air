@@ -818,6 +818,35 @@ def _parse_intervals(log: str, decoded_s: float) -> tuple[tuple[Interval, ...], 
     return tuple(found["freeze"]), tuple(found["silence"])
 
 
+def silence_transition(
+    now_ms: int,
+    last_signal_ms: int | None,
+    threshold_ms: int,
+    already_quiet: bool,
+) -> str:
+    """Mirror the Rust silence core; unknown time never becomes a false alert."""
+    if (
+        now_ms < 0
+        or threshold_ms <= 0
+        or last_signal_ms is None
+        or last_signal_ms < 0
+        or last_signal_ms > now_ms
+    ):
+        return "unknown"
+    quiet = now_ms - last_signal_ms >= threshold_ms
+    if quiet:
+        return "quiet" if already_quiet else "alert"
+    return "recovered" if already_quiet else "healthy"
+
+
+def _interval_exceeded(interval: Interval, window_s: float) -> bool:
+    duration_ms = int(round((interval.end_s - interval.start_s) * 1000))
+    threshold_ms = int(round(window_s * 1000)) - 100
+    if threshold_ms <= 0:
+        return True
+    return silence_transition(duration_ms, 0, threshold_ms, False) == "alert"
+
+
 def _dimension(
     *,
     name: str,
@@ -842,7 +871,7 @@ def _dimension(
         return DimensionEvidence("UNKNOWN", (f"{name}_DETECTOR_DISABLED",), sampled_s=sampled_s, decoded_s=decoded_s, coverage=coverage)
     if not coverage_ok:
         return DimensionEvidence("UNKNOWN", (f"{name}_COVERAGE_INCOMPLETE",), sampled_s=sampled_s, decoded_s=decoded_s, coverage=coverage)
-    if any((item.end_s - item.start_s) + 0.1 >= window_s for item in intervals):
+    if any(_interval_exceeded(item, window_s) for item in intervals):
         reason = "VIDEO_FREEZE" if name == "VIDEO" else "AUDIO_SILENCE"
         return DimensionEvidence("UNHEALTHY", (reason,), intervals, sampled_s, decoded_s, coverage)
     return DimensionEvidence("HEALTHY", (f"{name}_DECODED_NO_EVENT",), intervals, sampled_s, decoded_s, coverage)
